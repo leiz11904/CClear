@@ -1,0 +1,4 @@
+dist/
+*.syso
+*.exe
+.DS_Store

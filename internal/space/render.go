@@ -1,0 +1,248 @@
+package space
+
+import (
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"strings"
+)
+
+var (
+	colBg   = color.RGBA{245, 247, 250, 255}
+	colNav  = color.RGBA{255, 255, 255, 255}
+	colText = color.RGBA{24, 34, 48, 255}
+	colMute = color.RGBA{102, 112, 133, 255}
+	colLine = color.RGBA{228, 231, 236, 255}
+	colAcc  = color.RGBA{8, 127, 140, 255}
+	mapPal  = []color.RGBA{
+		{200, 232, 217, 255}, {240, 220, 200, 255}, {200, 220, 240, 255},
+		{232, 200, 212, 255}, {224, 232, 200, 255}, {200, 232, 232, 255},
+	}
+)
+
+// RenderUIPreview draws a layout sketch from a real Scan report.
+// It is not a Win32 window capture.
+func RenderUIPreview(rep Report, total, free uint64) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, 1100, 720))
+	fillRect(img, img.Bounds(), colBg)
+	fillRect(img, image.Rect(0, 0, 220, 720), colNav)
+	drawString(img, 24, 28, colText, "CClear")
+	drawString(img, 24, 52, colMute, "C: space")
+	nav := []string{"Home", "Clean", "Analyze", "Dupes", "Apps", "System", "History", "Settings"}
+	for i, title := range nav {
+		y := 96 + i*48
+		if title == "Analyze" {
+			fillRect(img, image.Rect(12, y, 208, y+40), color.RGBA{230, 244, 245, 255})
+			drawString(img, 28, y+14, colAcc, title)
+		} else {
+			drawString(img, 28, y+14, colText, title)
+		}
+	}
+	drawString(img, 248, 28, colText, "Analyze (real filesystem scan)")
+	drawString(img, 248, 56, colMute, "logical "+formatN(rep.Logical)+"  allocated "+formatN(rep.Allocated)+"  files "+itoa(int64(rep.Files)))
+	if total > 0 {
+		used := int64(total - free)
+		drawString(img, 248, 76, colMute, "capacity "+formatN(int64(total))+"  used "+formatN(used)+"  free "+formatN(int64(free)))
+	}
+	mapBox := image.Rect(248, 108, 1072, 328)
+	fillRect(img, mapBox, colLine)
+	nodes := []*Node{}
+	if rep.Tree != nil {
+		nodes = rep.Tree.Children
+		if len(nodes) == 0 {
+			nodes = []*Node{rep.Tree}
+		}
+	}
+	cells := LayoutTreemap(nodes, float64(mapBox.Min.X), float64(mapBox.Min.Y), float64(mapBox.Dx()), float64(mapBox.Dy()))
+	for i, cell := range cells {
+		r := image.Rect(int(cell.X)+1, int(cell.Y)+1, int(cell.X+cell.W)-1, int(cell.Y+cell.H)-1)
+		fillRect(img, r, mapPal[i%len(mapPal)])
+		if cell.W > 56 && cell.H > 16 {
+			drawString(img, r.Min.X+6, r.Min.Y+6, colText, clip(cell.Name, 18))
+		}
+	}
+	drawString(img, 248, 348, colText, "Top files (allocated / logical)")
+	y := 376
+	limit := 8
+	if len(rep.TopFiles) < limit {
+		limit = len(rep.TopFiles)
+	}
+	for _, file := range rep.TopFiles[:limit] {
+		drawString(img, 248, y, colText, formatN(file.Allocated)+"  "+clip(file.Name, 28))
+		drawString(img, 620, y, colMute, "logical "+formatN(file.Logical))
+		y += 22
+	}
+	drawString(img, 248, 640, colMute, "Generated from a real scan. Not a Win32 screenshot.")
+	drawString(img, 248, 662, colMute, "logical size is not treated as allocated disk use.")
+	return img
+}
+
+// WritePNG writes img to path.
+func WritePNG(path string, img image.Image) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return png.Encode(file, img)
+}
+
+func fillRect(img *image.RGBA, r image.Rectangle, c color.Color) {
+	r = r.Intersect(img.Bounds())
+	rr, gg, bb, aa := c.RGBA()
+	col := color.RGBA{uint8(rr >> 8), uint8(gg >> 8), uint8(bb >> 8), uint8(aa >> 8)}
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			img.SetRGBA(x, y, col)
+		}
+	}
+}
+
+func clip(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n]) + "…"
+}
+
+func formatN(n int64) string {
+	if n < 0 {
+		return "—"
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	v := float64(n)
+	i := 0
+	for v >= 1024 && i < len(units)-1 {
+		v /= 1024
+		i++
+	}
+	if i == 0 {
+		return itoa(n) + "B"
+	}
+	w := int64(v*10 + 0.5)
+	return itoa(w/10) + "." + itoa(w%10) + units[i]
+}
+
+func itoa(n int64) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var b [24]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		b[i] = '-'
+	}
+	return string(b[i:])
+}
+
+func drawString(img *image.RGBA, x, y int, c color.Color, s string) {
+	s = strings.ReplaceAll(s, "…", "...")
+	for _, r := range s {
+		x += drawGlyph(img, x, y, c, r)
+	}
+}
+
+func drawGlyph(img *image.RGBA, x, y int, c color.Color, r rune) int {
+	bits, ok := glyphs[r]
+	if !ok {
+		if r > 127 {
+			bits = glyphs['#']
+		} else {
+			bits = glyphs['?']
+		}
+	}
+	rr, gg, bb, aa := c.RGBA()
+	col := color.RGBA{uint8(rr >> 8), uint8(gg >> 8), uint8(bb >> 8), uint8(aa >> 8)}
+	for row := 0; row < 7; row++ {
+		line := bits[row]
+		for colx := 0; colx < 5; colx++ {
+			if line&(1<<uint(4-colx)) != 0 {
+				img.SetRGBA(x+colx, y+row, col)
+			}
+		}
+	}
+	return 6
+}
+
+// 5x7 glyphs for ASCII used in the preview labels.
+var glyphs = map[rune][7]byte{
+	' ': {0, 0, 0, 0, 0, 0, 0},
+	'.': {0, 0, 0, 0, 0, 0x10, 0},
+	'-': {0, 0, 0, 0x1F, 0, 0, 0},
+	'/': {0x01, 0x02, 0x04, 0x08, 0x10, 0, 0},
+	'(': {0x0E, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0E},
+	')': {0x1C, 0x02, 0x02, 0x02, 0x02, 0x02, 0x1C},
+	':': {0, 0x10, 0, 0, 0x10, 0, 0},
+	'#': {0x0A, 0x1F, 0x0A, 0x1F, 0x0A, 0, 0},
+	'?': {0x0E, 0x11, 0x02, 0x04, 0x04, 0, 0x04},
+	'0': {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E},
+	'1': {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},
+	'2': {0x0E, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1F},
+	'3': {0x1F, 0x01, 0x02, 0x06, 0x01, 0x11, 0x0E},
+	'4': {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02},
+	'5': {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E},
+	'6': {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E},
+	'7': {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},
+	'8': {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E},
+	'9': {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C},
+	'A': {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11},
+	'B': {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E},
+	'C': {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E},
+	'D': {0x1C, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1C},
+	'E': {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F},
+	'F': {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10},
+	'G': {0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F},
+	'H': {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11},
+	'I': {0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E},
+	'K': {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11},
+	'L': {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F},
+	'M': {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11},
+	'N': {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11},
+	'O': {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E},
+	'P': {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10},
+	'R': {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11},
+	'S': {0x0E, 0x11, 0x10, 0x0E, 0x01, 0x11, 0x0E},
+	'T': {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
+	'U': {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E},
+	'V': {0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04},
+	'W': {0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11},
+	'X': {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11},
+	'Y': {0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04},
+	'a': {0, 0, 0x0E, 0x01, 0x0F, 0x11, 0x0F},
+	'b': {0x10, 0x10, 0x1E, 0x11, 0x11, 0x11, 0x1E},
+	'c': {0, 0, 0x0E, 0x11, 0x10, 0x11, 0x0E},
+	'd': {0x01, 0x01, 0x0F, 0x11, 0x11, 0x11, 0x0F},
+	'e': {0, 0, 0x0E, 0x11, 0x1F, 0x10, 0x0E},
+	'f': {0x06, 0x08, 0x1E, 0x08, 0x08, 0x08, 0x08},
+	'g': {0, 0, 0x0F, 0x11, 0x0F, 0x01, 0x0E},
+	'j': {0x02, 0, 0x06, 0x02, 0x02, 0x12, 0x0C},
+	'k': {0x10, 0x10, 0x12, 0x14, 0x18, 0x14, 0x12},
+	'h': {0x10, 0x10, 0x1E, 0x11, 0x11, 0x11, 0x11},
+	'i': {0x04, 0, 0x0C, 0x04, 0x04, 0x04, 0x0E},
+	'l': {0x0C, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E},
+	'm': {0, 0, 0x1A, 0x15, 0x15, 0x15, 0x15},
+	'n': {0, 0, 0x1E, 0x11, 0x11, 0x11, 0x11},
+	'o': {0, 0, 0x0E, 0x11, 0x11, 0x11, 0x0E},
+	'p': {0, 0, 0x1E, 0x11, 0x1E, 0x10, 0x10},
+	'r': {0, 0, 0x16, 0x19, 0x10, 0x10, 0x10},
+	's': {0, 0, 0x0F, 0x10, 0x0E, 0x01, 0x1E},
+	't': {0x08, 0x08, 0x1E, 0x08, 0x08, 0x09, 0x06},
+	'u': {0, 0, 0x11, 0x11, 0x11, 0x13, 0x0D},
+	'v': {0, 0, 0x11, 0x11, 0x11, 0x0A, 0x04},
+	'w': {0, 0, 0x11, 0x11, 0x15, 0x15, 0x0A},
+	'x': {0, 0, 0x11, 0x0A, 0x04, 0x0A, 0x11},
+	'z': {0, 0, 0x1F, 0x02, 0x04, 0x08, 0x1F},
+	'y': {0, 0, 0x11, 0x11, 0x0F, 0x01, 0x0E},
+}
