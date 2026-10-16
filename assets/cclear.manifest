@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="2.7.0.0" processorArchitecture="*" name="CClear" type="win32"/>
+  <assemblyIdentity version="3.0.0.0" processorArchitecture="*" name="CClear" type="win32"/>
   <description>C盘安全清理</description>
   <dependency>
     <dependentAssembly>

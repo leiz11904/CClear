@@ -46,7 +46,10 @@ func listInstalled(ctx context.Context) Report {
 			}
 			app := readApp(sub)
 			sub.Close()
-			if app.Name == "" || app.Uninstall == "" {
+			if app.Name == "" {
+				continue
+			}
+			if app.Uninstall == "" && !app.System {
 				continue
 			}
 			key := strings.ToLower(app.Name + "|" + app.Location)
@@ -75,10 +78,8 @@ func readApp(key registry.Key) App {
 	app.Location = stringValue(key, "InstallLocation")
 	app.Uninstall = stringValue(key, "UninstallString")
 	syscomp, _, _ := key.GetIntegerValue("SystemComponent")
-	if syscomp == 1 {
-		app.Name = ""
-		return app
-	}
+	app.Kind = classifyApp(app.Uninstall, app.Location, syscomp == 1)
+	app.System = app.Kind == "system"
 	if release, _, err := key.GetIntegerValue("EstimatedSize"); err == nil {
 		app.Estimated = int64(release) * 1024
 		app.EstimatedOK = true
@@ -86,6 +87,17 @@ func readApp(key registry.Key) App {
 		app.Note = "系统没有提供安装大小"
 	}
 	return app
+}
+
+func classifyApp(uninstall, location string, system bool) string {
+	if system {
+		return "system"
+	}
+	text := strings.ToLower(uninstall + " " + location)
+	if strings.Contains(text, "remove-appxpackage") || strings.Contains(text, `\windowsapps\`) {
+		return "store"
+	}
+	return "win32"
 }
 
 func stringValue(key registry.Key, name string) string {

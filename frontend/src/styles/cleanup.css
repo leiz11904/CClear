@@ -1,0 +1,29 @@
+.cleanup { display: flex; flex-direction: column; gap: 12px; }
+.flow, .summary-board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.flow article, .summary-board article, .clean-row {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.summary-board .btn { grid-column: 1 / -1; justify-self: start; }
+.summary-board strong, .report dd { font-size: 22px; font-variant-numeric: tabular-nums; }
+.review { display: flex; flex-direction: column; gap: 12px; }
+.bucket header p, .clean-row em, .clean-row p { color: var(--muted); }
+.clean-row label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+.clean-row.on { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); }
+.clean-row code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.review-bar { position: sticky; bottom: 0; padding-top: 4px; }
+.report { padding: 16px; }
+.report dl { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+.report dt { color: var(--muted); }
+.report dd { margin: 0; }

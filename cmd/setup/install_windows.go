@@ -15,14 +15,14 @@ import (
 	"unsafe"
 
 	"cclear/internal/appinfo"
+	itxn "cclear/internal/install"
 	"cclear/internal/payload"
 	"cclear/internal/winpath"
+	"cclear/internal/winptr"
 	"github.com/lxn/win"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
-
-const uninstallKey = `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\CClear`
 
 func isUninstall(args []string) bool {
 	if strings.EqualFold(filepath.Base(args[0]), "Uninstall.exe") {
@@ -110,31 +110,64 @@ func install(dir string) error {
 	if err := ensureRealDir(cleaned); err != nil {
 		return err
 	}
-	dir = cleaned
+	if err := closeRunningApp(); err != nil {
+		return err
+	}
 	app, err := embeddedApp()
 	if err != nil {
 		return err
-	}
-	closeRunningApp()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	target := filepath.Join(dir, "cclear.exe")
-	if err := os.WriteFile(target, app, 0o755); err != nil {
-		return fmt.Errorf("无法写入程序：%w", err)
 	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	uninst := filepath.Join(dir, "Uninstall.exe")
-	if err := copyFile(self, uninst); err != nil {
-		return fmt.Errorf("无法写入卸载程序：%w", err)
-	}
-	if err := createShortcuts(dir, target, uninst); err != nil {
+	selfBytes, err := os.ReadFile(self)
+	if err != nil {
 		return err
 	}
-	return writeUninstallKey(dir, target, uninst)
+	tx, err := itxn.Begin(cleaned)
+	if err != nil {
+		return err
+	}
+	if err := tx.Stage("cclear.exe", app); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Stage("Uninstall.exe", selfBytes); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	dir = tx.Dir()
+	target := filepath.Join(dir, "cclear.exe")
+	uninst := filepath.Join(dir, "Uninstall.exe")
+	programsRoot := knownOr(commonProgramsID, filepath.Join(os.Getenv("ProgramData"), `Microsoft\Windows\Start Menu\Programs`))
+	desktopRoot := knownOr(publicDesktopID, filepath.Join(os.Getenv("PUBLIC"), "Desktop"))
+	shortcutSnap, err := SnapshotManagedShortcuts(programsRoot, desktopRoot)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	regSnap, err := snapshotUninstallRegistry()
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	createdProgramsDir, err := createShortcuts(shortcutSnap, dir, target, uninst)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := writeUninstallKey(dir, target, uninst); err != nil {
+		_ = regSnap.restoreUninstallRegistry()
+		_ = shortcutSnap.Restore(createdProgramsDir)
+		_ = tx.Rollback()
+		return err
+	}
+	tx.Cleanup()
+	return nil
 }
 
 func uninstall() error {
@@ -142,7 +175,9 @@ func uninstall() error {
 	if dir == "" {
 		dir = filepath.Dir(currentExe())
 	}
-	closeRunningApp()
+	if err := closeRunningApp(); err != nil {
+		return err
+	}
 	_ = os.Remove(filepath.Join(dir, "cclear.exe"))
 	removeShortcuts()
 	_ = registry.DeleteKey(registry.LOCAL_MACHINE, uninstallKey)
@@ -200,31 +235,20 @@ func writeUninstallKey(dir, target, uninst string) error {
 	return nil
 }
 
-func createShortcuts(dir, target, uninst string) error {
-	programs := filepath.Join(knownOr(commonProgramsID, filepath.Join(os.Getenv("ProgramData"), `Microsoft\Windows\Start Menu\Programs`)), "CClear")
-	desktop := knownOr(publicDesktopID, filepath.Join(os.Getenv("PUBLIC"), "Desktop"))
-	if err := os.MkdirAll(programs, 0o755); err != nil {
-		return err
-	}
-	if err := shortcut(filepath.Join(programs, "CClear.lnk"), target, dir); err != nil {
-		return fmt.Errorf("无法创建开始菜单快捷方式：%w", err)
-	}
-	if err := shortcut(filepath.Join(programs, "卸载 CClear.lnk"), uninst, dir); err != nil {
-		return fmt.Errorf("无法创建卸载快捷方式：%w", err)
-	}
-	if err := shortcut(filepath.Join(desktop, "CClear.lnk"), target, dir); err != nil {
-		return fmt.Errorf("无法创建桌面快捷方式：%w", err)
-	}
-	return nil
+func createShortcuts(snap ManagedShortcutSnapshot, dir, target, uninst string) (createdProgramsDir bool, err error) {
+	return CreateManagedShortcuts(snap, dir, target, uninst, shortcut)
 }
 
 func removeShortcuts() {
-	programs := filepath.Join(knownOr(commonProgramsID, filepath.Join(os.Getenv("ProgramData"), `Microsoft\Windows\Start Menu\Programs`)), "CClear")
-	desktop := knownOr(publicDesktopID, filepath.Join(os.Getenv("PUBLIC"), "Desktop"))
-	_ = os.Remove(filepath.Join(programs, "CClear.lnk"))
-	_ = os.Remove(filepath.Join(programs, "卸载 CClear.lnk"))
-	_ = os.Remove(programs)
-	_ = os.Remove(filepath.Join(desktop, "CClear.lnk"))
+	programsRoot := knownOr(commonProgramsID, filepath.Join(os.Getenv("ProgramData"), `Microsoft\Windows\Start Menu\Programs`))
+	desktopRoot := knownOr(publicDesktopID, filepath.Join(os.Getenv("PUBLIC"), "Desktop"))
+	programsDir, appLink, uninstallLink, desktopLink := ManagedShortcutPaths(programsRoot, desktopRoot)
+	_ = os.Remove(appLink)
+	_ = os.Remove(uninstallLink)
+	_ = os.Remove(desktopLink)
+	if empty, err := dirEmpty(programsDir); err == nil && empty {
+		_ = os.Remove(programsDir)
+	}
 }
 
 func shortcut(link, target, workdir string) error {
@@ -258,15 +282,39 @@ func shortcut(link, target, workdir string) error {
 	return nil
 }
 
-func closeRunningApp() {
-	name, _ := windows.UTF16PtrFromString("CClearMainWindow")
-	user32 := windows.NewLazySystemDLL("user32.dll")
-	hwnd, _, _ := user32.NewProc("FindWindowW").Call(uintptr(unsafe.Pointer(name)), 0)
-	if hwnd == 0 {
-		return
+func closeRunningApp() error {
+	name, err := windows.UTF16PtrFromString("CClearMainWindow")
+	if err != nil {
+		return err
 	}
-	user32.NewProc("SendMessageW").Call(hwnd, uintptr(win.WM_CLOSE), 0, 0)
-	time.Sleep(700 * time.Millisecond)
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	find := user32.NewProc("FindWindowW")
+	hwnd, _, _ := find.Call(uintptr(unsafe.Pointer(name)), 0)
+	if hwnd == 0 {
+		return nil
+	}
+	var result uintptr
+	ret, _, _ := user32.NewProc("SendMessageTimeoutW").Call(
+		hwnd,
+		uintptr(win.WM_CLOSE),
+		0,
+		0,
+		0x0002, // SMTO_ABORTIFHUNG
+		uintptr(itxn.CloseTimeoutMs),
+		uintptr(unsafe.Pointer(&result)),
+	)
+	if ret == 0 {
+		return itxn.AppStillRunningError()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		hwnd, _, _ = find.Call(uintptr(unsafe.Pointer(name)), 0)
+		if hwnd == 0 {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return itxn.AppStillRunningError()
 }
 
 func scheduleDelete(dir, self string) error {
@@ -378,6 +426,6 @@ func knownFolder(id windows.GUID) (string, error) {
 		}
 		return "", errors.New("无法定位系统文件夹")
 	}
-	defer windows.CoTaskMemFree(unsafe.Pointer(out))
-	return windows.UTF16PtrToString((*uint16)(unsafe.Pointer(out))), nil
+	defer windows.CoTaskMemFree(winptr.Ptr(out))
+	return windows.UTF16PtrToString((*uint16)(winptr.Ptr(out))), nil
 }

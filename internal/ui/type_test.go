@@ -3,7 +3,7 @@ package ui
 import "testing"
 
 func TestTypeScale(t *testing.T) {
-	if TypeSpecOf(TypePageTitle).Px != 24 || TypeSpecOf(TypePageTitle).Weight != WeightSemibold {
+	if TypeSpecOf(TypePageTitle).Px != 20 || TypeSpecOf(TypePageTitle).Weight != WeightSemibold {
 		t.Fatal("page title")
 	}
 	if TypeSpecOf(TypeBody).Px != 14 || TypeSpecOf(TypeBody).Weight != WeightRegular {

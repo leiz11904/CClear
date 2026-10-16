@@ -11,6 +11,7 @@ const (
 	PageSystem
 	PageHistory
 	PageSettings
+	PageLarge
 	PageRegular = PageClean
 	PageDeep    = PageClean
 )
@@ -48,11 +49,14 @@ func NavGroups() []NavGroup {
 			{PageClean, "垃圾清理", "查看结果并清理", "clean", "clean"},
 			{PageHistory, "清理历史", "来自本机日志", "clean", "history"},
 		}},
-		{"工具", []NavItem{
-			{PageAnalyze, "磁盘分析", "目录树与大文件", "tools", "disk"},
-			{PageDupes, "重复文件", "只分析，不自动删除", "tools", "dupes"},
-			{PageApps, "软件管理", "登记的卸载信息", "tools", "apps"},
-			{PageSystem, "系统工具", "系统占用与快照", "tools", "system"},
+		{"分析", []NavItem{
+			{PageAnalyze, "磁盘分析", "目录占用与类型分布", "analyze", "disk"},
+			{PageLarge, "大文件", "按大小查看，不当成垃圾", "analyze", "files"},
+			{PageDupes, "重复文件", "只分析，不自动删除", "analyze", "dupes"},
+		}},
+		{"管理", []NavItem{
+			{PageApps, "软件管理", "登记的卸载信息", "manage", "apps"},
+			{PageSystem, "系统工具", "系统占用与快照", "manage", "system"},
 		}},
 	}
 }

@@ -39,7 +39,7 @@ const (
 func TypeSpecOf(role TypeRole) TypeSpec {
 	switch role {
 	case TypePageTitle:
-		return TypeSpec{Px: 24, Weight: WeightSemibold, Line: 1.3}
+		return TypeSpec{Px: 20, Weight: WeightSemibold, Line: 1.3}
 	case TypePageHint:
 		return TypeSpec{Px: 14, Weight: WeightRegular, Line: 1.5}
 	case TypeSection:

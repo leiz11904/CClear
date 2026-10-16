@@ -26,6 +26,7 @@ import (
 	"cclear/internal/sysspace"
 	"cclear/internal/syswin"
 	"cclear/internal/ui"
+	"cclear/internal/winptr"
 	"github.com/lxn/win"
 	"golang.org/x/sys/windows"
 )
@@ -75,9 +76,7 @@ type app struct {
 	scroll     int
 	contentH   int
 	scanned    bool
-	hits       []hit
 	expanded   map[string]bool
-	hover      bool
 
 	mu            sync.Mutex
 	cancel        context.CancelFunc
@@ -106,6 +105,15 @@ type app struct {
 	snaps         []snapshot.Record
 	treeOpen      map[string]bool
 	selected      string
+	analyzeTab    int
+	treeScroll    int
+	treeCount     int
+	treeShown     int
+	hotBtn        win.HWND
+	leaveTracked  win.HWND
+	tip           win.HWND
+	tipHot        win.HWND
+	tipLines      []string
 	largeMin      int64
 	largeSort     string
 	spaceOK       bool
@@ -114,11 +122,17 @@ type app struct {
 	sysOK         bool
 	history       []history.Record
 	settingCats   []clean.Category
+	host          win.HWND
+	scrollBar     win.HWND
+	viewH         int
+	painting      bool
 	navBtns       []win.HWND
 	checkBtns     []win.HWND
 	checkLaid     []placedCheck
 	detailBtns    []win.HWND
 	detailLaid    []placedBtn
+	actBtns       []win.HWND
+	actLaid       []actionPlace
 	btnScan       win.HWND
 	btnClean      win.HWND
 	btnSelect     win.HWND
@@ -239,6 +253,27 @@ func (a *app) run() error {
 		HIconSm:       icon,
 	}
 	win.RegisterClassEx(&detailClass)
+	contentClass := win.WNDCLASSEX{
+		CbSize:        uint32(unsafe.Sizeof(win.WNDCLASSEX{})),
+		LpfnWndProc:   windows.NewCallback(contentProc),
+		HInstance:     inst,
+		HCursor:       cursor,
+		HbrBackground: a.pageBrush,
+		LpszClassName: u16(classContent),
+		HIcon:         icon,
+		HIconSm:       icon,
+	}
+	win.RegisterClassEx(&contentClass)
+	tipClass := win.WNDCLASSEX{
+		CbSize:        uint32(unsafe.Sizeof(win.WNDCLASSEX{})),
+		Style:         0x00020000,
+		LpfnWndProc:   windows.NewCallback(tipProc),
+		HInstance:     inst,
+		HCursor:       cursor,
+		HbrBackground: a.cardBrush,
+		LpszClassName: u16(classTip),
+	}
+	win.RegisterClassEx(&tipClass)
 
 	a.win = win.CreateWindowEx(
 		0x00010000, // WS_EX_CONTROLPARENT
@@ -251,7 +286,31 @@ func (a *app) run() error {
 	if a.win == 0 {
 		return fmt.Errorf("无法创建窗口")
 	}
+	a.tip = win.CreateWindowEx(
+		0x08000088, // WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+		u16(classTip),
+		u16(""),
+		0x80000000, // WS_POPUP
+		0, 0, 0, 0,
+		a.win, 0, inst, nil,
+	)
 	a.hwnd.Store(uintptr(a.win))
+	a.host = win.CreateWindowEx(
+		0x00010000, // WS_EX_CONTROLPARENT
+		u16(classContent),
+		u16(""),
+		win.WS_CHILD|win.WS_VISIBLE|win.WS_CLIPCHILDREN|win.WS_CLIPSIBLINGS,
+		0, 0, 10, 10,
+		a.win, 0, inst, nil,
+	)
+	a.scrollBar = win.CreateWindowEx(
+		0,
+		u16("SCROLLBAR"),
+		u16("页面滚动"),
+		win.WS_CHILD|win.WS_TABSTOP|sbsVert,
+		0, 0, 10, 10,
+		a.win, win.HMENU(idScroll), inst, nil,
+	)
 	setImmersiveDark(a.win, a.dark)
 	if dpi := win.GetDpiForWindow(a.win); dpi != 0 {
 		a.dpi = int(dpi)
@@ -292,13 +351,13 @@ func (a *app) wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr
 		}
 		a.createFonts()
 		if lParam != 0 {
-			rc := (*win.RECT)(unsafe.Pointer(lParam))
+			rc := (*win.RECT)(winptr.Ptr(lParam))
 			win.SetWindowPos(hwnd, 0, rc.Left, rc.Top, rc.Right-rc.Left, rc.Bottom-rc.Top, win.SWP_NOZORDER|win.SWP_NOACTIVATE)
 		}
 		a.redraw()
 		return 0
 	case win.WM_GETMINMAXINFO:
-		info := (*win.MINMAXINFO)(unsafe.Pointer(lParam))
+		info := (*win.MINMAXINFO)(winptr.Ptr(lParam))
 		info.PtMinTrackSize.X = int32(a.scale(960))
 		info.PtMinTrackSize.Y = int32(a.scale(640))
 		return 0
@@ -308,7 +367,13 @@ func (a *app) wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr
 		a.paint()
 		return 0
 	case win.WM_COMMAND:
-		a.onCommand(wParam)
+		a.onCommand(wParam, lParam)
+		return 0
+	case win.WM_VSCROLL:
+		a.onVScroll(wParam)
+		return 0
+	case win.WM_SETTINGCHANGE, win.WM_SYSCOLORCHANGE, 0x031A: // WM_THEMECHANGED
+		a.redraw()
 		return 0
 	case win.WM_CTLCOLORBTN, win.WM_CTLCOLORSTATIC:
 		if a.isCheck(win.HWND(lParam)) {
@@ -320,25 +385,8 @@ func (a *app) wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr
 				return uintptr(a.cardBrush)
 			}
 		}
-	case 0x002B: // WM_DRAWITEM
-		a.drawItem(lParam)
-		return 1
-	case win.WM_LBUTTONDOWN:
-		x, y := mouseClient(hwnd, lParam)
-		a.onClick(x, y)
-		return 0
-	case win.WM_MOUSEMOVE:
-		x, y := mouseClient(hwnd, lParam)
-		a.onMove(x, y)
-		return 0
-	case win.WM_SETCURSOR:
-		if a.hover {
-			setHand(true)
-			return 1
-		}
 	case win.WM_MOUSEWHEEL:
-		delta := int16(wParam >> 16)
-		a.scrollBy(-int(delta) / 2)
+		a.onWheel(int16(wParam >> 16))
 		return 0
 	case win.WM_TIMER:
 		if a.busy() {
@@ -389,45 +437,27 @@ func (a *app) paint() {
 	a.layoutNative(client)
 	var ps win.PAINTSTRUCT
 	hdc := win.BeginPaint(a.win, &ps)
-	defer win.EndPaint(a.win, &ps)
 	mem := win.CreateCompatibleDC(hdc)
 	bmp := win.CreateCompatibleBitmap(hdc, client.Right, client.Bottom)
 	old := win.SelectObject(mem, win.HGDIOBJ(bmp))
-	a.paintAll(mem, client)
-	a.excludeChildren(hdc)
+	a.paintShell(mem, client)
+	a.excludeShell(hdc)
 	win.BitBlt(hdc, 0, 0, client.Right, client.Bottom, mem, 0, 0, win.SRCCOPY)
 	win.SelectObject(mem, old)
 	win.DeleteObject(win.HGDIOBJ(bmp))
 	win.DeleteDC(mem)
-	a.layoutNative(client)
-	a.refreshChildren()
+	win.EndPaint(a.win, &ps)
+	a.refreshShell()
+	if a.host != 0 {
+		win.InvalidateRect(a.host, nil, false)
+		win.UpdateWindow(a.host)
+	}
 }
 
 func (a *app) redraw() {
 	if a.win != 0 {
 		win.InvalidateRect(a.win, nil, false)
 	}
-}
-
-func (a *app) hitAt(x, y int) *hit {
-	for i := range a.hits {
-		if contains(a.hits[i].rc, x, y) {
-			return &a.hits[i]
-		}
-	}
-	return nil
-}
-
-func (a *app) onMove(x, y int) {
-	a.hover = a.hitAt(x, y) != nil
-}
-
-func (a *app) onClick(x, y int) {
-	h := a.hitAt(x, y)
-	if h == nil {
-		return
-	}
-	a.onClickHit(*h)
 }
 
 func (a *app) onClickHit(h hit) {
@@ -540,6 +570,15 @@ func (a *app) onClickHit(h hit) {
 		a.redraw()
 	case hitTheme:
 		a.setTheme(h.id)
+	case hitGo:
+		a.setPage(h.index)
+	case hitAnalyzeTab:
+		if h.index >= 0 && h.index < 3 {
+			a.analyzeTab = h.index
+			a.redraw()
+		}
+	case hitFileMenu:
+		a.showFileMenu(h.id)
 	case hitLogKeep:
 		a.logKeepMB = prefs.ClampLogKeepMB(h.index)
 		a.persistChoices()
@@ -548,6 +587,53 @@ func (a *app) onClickHit(h hit) {
 		_ = syswin.OpenPath(filepath.Join(logDir(), h.id))
 	case hitScroll:
 		a.scrollBy(a.scale(80))
+	}
+}
+
+var (
+	procCreatePopup = windows.NewLazySystemDLL("user32.dll").NewProc("CreatePopupMenu")
+	procAppendMenuW = windows.NewLazySystemDLL("user32.dll").NewProc("AppendMenuW")
+	procTrackPopup  = windows.NewLazySystemDLL("user32.dll").NewProc("TrackPopupMenu")
+	procDestroyMenu = windows.NewLazySystemDLL("user32.dll").NewProc("DestroyMenu")
+	procGetCursor   = windows.NewLazySystemDLL("user32.dll").NewProc("GetCursorPos")
+)
+
+func (a *app) showFileMenu(path string) {
+	if path == "" || a.win == 0 {
+		return
+	}
+	menu, _, _ := procCreatePopup.Call()
+	if menu == 0 {
+		return
+	}
+	defer procDestroyMenu.Call(menu)
+	add := func(id uintptr, label string) {
+		text, err := windows.UTF16PtrFromString(label)
+		if err != nil {
+			return
+		}
+		procAppendMenuW.Call(menu, 0, id, uintptr(unsafe.Pointer(text)))
+		runtime.KeepAlive(text)
+	}
+	add(1, "打开")
+	add(2, "打开位置")
+	add(3, "复制路径")
+	add(4, "属性")
+	add(5, "移到回收站")
+	var pt win.POINT
+	procGetCursor.Call(uintptr(unsafe.Pointer(&pt)))
+	cmd, _, _ := procTrackPopup.Call(menu, 0x0100|0x0080, uintptr(pt.X), uintptr(pt.Y), 0, uintptr(a.win), 0)
+	switch cmd {
+	case 1:
+		a.onClickHit(hit{kind: hitOpen, id: path})
+	case 2:
+		a.onClickHit(hit{kind: hitReveal, id: path})
+	case 3:
+		a.onClickHit(hit{kind: hitCopy, id: path})
+	case 4:
+		a.onClickHit(hit{kind: hitProps, id: path})
+	case 5:
+		a.onClickHit(hit{kind: hitRecycle, id: path})
 	}
 }
 
@@ -561,12 +647,75 @@ func (a *app) setPage(page int) {
 	a.redraw()
 }
 
+func (a *app) revealTreeRow(path string) {
+	rows := flattenTree(a.space.Tree, 0, a.treeOpen, nil)
+	idx := -1
+	for i, row := range rows {
+		if row.node != nil && strings.EqualFold(row.node.Path, path) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return
+	}
+	if a.treeShown > 0 && idx >= a.treeScroll && idx < a.treeScroll+a.treeShown {
+		return
+	}
+	a.treeScroll = idx
+}
+
+func (a *app) onWheel(delta int16) {
+	a.hideTip()
+	if a.page == ui.PageAnalyze && a.contentH <= a.viewH+4 && a.treeCount > a.treeShown {
+		step := 3
+		if delta > 0 {
+			a.scrollTree(-step)
+		} else if delta < 0 {
+			a.scrollTree(step)
+		}
+		return
+	}
+	a.scrollBy(-int(delta) / 2)
+}
+
+func (a *app) scrollTree(rows int) {
+	a.treeScroll += rows
+	if a.treeScroll < 0 {
+		a.treeScroll = 0
+	}
+	max := a.treeCount - a.treeShown
+	if max < 0 {
+		max = 0
+	}
+	if a.treeScroll > max {
+		a.treeScroll = max
+	}
+	a.redraw()
+}
+
 func (a *app) scrollBy(delta int) {
-	a.scroll += delta
+	a.scrollTo(a.scroll + delta)
+}
+
+func (a *app) scrollTo(pos int) {
+	a.scroll = pos
+	a.clampScroll()
+	a.redraw()
+}
+
+func (a *app) clampScroll() {
+	view := a.viewH
+	max := a.contentH - view
+	if max < 0 {
+		max = 0
+	}
+	if a.scroll > max {
+		a.scroll = max
+	}
 	if a.scroll < 0 {
 		a.scroll = 0
 	}
-	a.redraw()
 }
 
 func (a *app) toggleChoice(id string) {
@@ -1080,6 +1229,7 @@ func (a *app) selectTree(path string) {
 		a.treeOpen = map[string]bool{}
 	}
 	a.selected = path
+	a.hideTip()
 	n := a.space.Tree
 	for n != nil {
 		a.treeOpen[n.Path] = true
@@ -1092,6 +1242,7 @@ func (a *app) selectTree(path string) {
 		}
 		n = next
 	}
+	a.revealTreeRow(path)
 	a.redraw()
 }
 

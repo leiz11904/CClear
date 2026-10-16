@@ -44,7 +44,7 @@ func SectionHint(section int) string {
 	case SectionOptional:
 		return "可用，但默认不选。请先阅读说明。"
 	case SectionAdvanced:
-		return "可能影响系统还原、更新或排障。默认关闭，需展开后手动勾选。"
+		return AdvancedWarning() + "。可能影响系统还原、更新或排障，全选也不会打开。"
 	default:
 		return ""
 	}
@@ -176,7 +176,7 @@ func HighRiskValue(n int) string {
 }
 
 func HighRiskExplain() string {
-	return "默认关闭，需手动确认"
+	return AdvancedWarning()
 }
 
 func FormatScanAt(t time.Time) string {
@@ -187,9 +187,9 @@ func FormatScanAt(t time.Time) string {
 }
 
 func CleanCardH(advanced, expanded bool) int {
-	h := 56
+	h := 60
 	if advanced {
-		h += 18
+		h += 20
 	}
 	if expanded {
 		h += 84

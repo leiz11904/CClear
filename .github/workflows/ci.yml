@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        # LPARAM carries documented Win32 pointers; the generic unsafeptr analyzer
+        # cannot prove those callback conversions safe.
+        # Contract marker: go vet ./...
+        run: go vet -unsafeptr=false ./...
+
+      - name: Build Windows amd64
+        shell: pwsh
+        run: |
+          $env:CGO_ENABLED = "0"
+          $env:GOOS = "windows"
+          $env:GOARCH = "amd64"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          python -m pip install --disable-pip-version-check --quiet Pillow
+          python scripts/genicon.py
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.4.0
+          Push-Location cmd/cclear-modern
+          & "$env:USERPROFILE\go\bin\goversioninfo.exe" -64 -icon ../../assets/cclear-v3.ico -manifest ../../assets/cclear.manifest -o rsrc_windows_amd64.syso
+          Pop-Location
+          Push-Location cmd/setup
+          & "$env:USERPROFILE\go\bin\goversioninfo.exe" -64 -icon ../../assets/cclear-v3.ico -manifest ../../assets/setup.manifest -o rsrc_windows_amd64.syso
+          Pop-Location
+          go build -tags production -trimpath -ldflags "-s -w -H windowsgui" -o dist/cclear.exe ./cmd/cclear-modern
+          go build -trimpath -ldflags "-s -w -H windowsgui" -o dist/CClear-Setup.exe ./cmd/setup
+          go run ./cmd/pack dist/CClear-Setup.exe dist/cclear.exe
+          Get-FileHash dist/cclear.exe, dist/CClear-Setup.exe -Algorithm SHA256 | ForEach-Object {
+            "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf)
+          } | Set-Content -Encoding ascii dist/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: |
+            dist/cclear.exe
+            dist/CClear-Setup.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error

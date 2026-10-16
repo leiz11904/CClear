@@ -12,6 +12,8 @@ type App struct {
 	Estimated   int64
 	EstimatedOK bool
 	Note        string
+	System      bool
+	Kind        string
 }
 
 // Report lists registered applications. It never deletes install directories.

@@ -10,7 +10,7 @@ ManifestDPIAware true
 !include "LogicLib.nsh"
 
 !define PRODUCT_NAME "CClear"
-!define PRODUCT_VERSION "2.7.0"
+!define PRODUCT_VERSION "3.0.0"
 !define PRODUCT_PUBLISHER "CClear"
 !define APP_EXE "cclear.exe"
 
@@ -25,11 +25,11 @@ BrandingText "CClear ${PRODUCT_VERSION}"
 ShowInstDetails show
 ShowUninstDetails show
 
-Icon "..\assets\cclear.ico"
-UninstallIcon "..\assets\cclear.ico"
+Icon "..\assets\cclear-v3.ico"
+UninstallIcon "..\assets\cclear-v3.ico"
 
-VIProductVersion "2.7.0.0"
-VIFileVersion "2.7.0.0"
+VIProductVersion "3.0.0.0"
+VIFileVersion "3.0.0.0"
 VIAddVersionKey /LANG=2052 "ProductName" "CClear"
 VIAddVersionKey /LANG=2052 "CompanyName" "CClear"
 VIAddVersionKey /LANG=2052 "FileDescription" "CClear 安装程序"
@@ -39,8 +39,8 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright (C) 2026 CClear"
 VIAddVersionKey /LANG=2052 "OriginalFilename" "CClear-Setup-${PRODUCT_VERSION}.exe"
 
 !define MUI_ABORTWARNING
-!define MUI_ICON "..\assets\cclear.ico"
-!define MUI_UNICON "..\assets\cclear.ico"
+!define MUI_ICON "..\assets\cclear-v3.ico"
+!define MUI_UNICON "..\assets\cclear-v3.ico"
 !define MUI_WELCOMEPAGE_TITLE "欢迎使用 CClear 安装向导"
 !define MUI_WELCOMEPAGE_TEXT "此向导将把 CClear 安装到你的计算机。$\r$\n$\r$\nCClear 用于安全清理系统盘上的临时文件、缓存和回收站，以释放磁盘空间。$\r$\n$\r$\n它不会删除文档、桌面、下载目录，也不会卸载已安装的软件。清理前可以先扫描并查看将要删除的内容。$\r$\n$\r$\n点击“下一步”继续。"
 !define MUI_LICENSEPAGE_TEXT_TOP "请阅读下列说明。安装后可以从 Windows 的“应用和功能”中卸载 CClear。"

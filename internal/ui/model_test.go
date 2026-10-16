@@ -18,16 +18,20 @@ func TestReportsForPage(t *testing.T) {
 		t.Fatal("clean page should show every cleanup group")
 	}
 	items := NavItems()
-	if len(items) != 8 {
+	if len(items) != 9 {
 		t.Fatalf("nav %d", len(items))
 	}
 	if items[len(items)-1].Page != PageSettings {
 		t.Fatal("settings must be last")
 	}
-	if items[6].Title != "系统工具" {
-		t.Fatalf("system title %s", items[6].Title)
+	if items[4].Title != "大文件" || items[4].Page != PageLarge {
+		t.Fatalf("large files nav %+v", items[4])
 	}
-	if len(NavGroups()) != 2 || NavGroups()[0].Title != "清理" || NavGroups()[1].Title != "工具" {
+	if items[7].Title != "系统工具" {
+		t.Fatalf("system title %s", items[7].Title)
+	}
+	groups := NavGroups()
+	if len(groups) != 3 || groups[0].Title != "清理" || groups[1].Title != "分析" || groups[2].Title != "管理" {
 		t.Fatal("nav groups")
 	}
 }

@@ -17,18 +17,17 @@ const (
 	idFootSel    = 2103
 	idFootWork   = 2104
 	idFootAdmin  = 2105
+	idScroll     = 2300
 	idCheckBase  = 3000
 	idDetailBase = 4000
+	idActionBase = 5000
+	sbsVert      = 0x0001
+	actionCap    = 4096
 	bsPushButton = 0x00000000
 	bsDefPush    = 0x00000001
 	bsAutoCheck  = 0x00000003
-	bsOwnerDraw  = 0x0000000B
 	bmGetCheck   = 0x00F0
 	bmSetCheck   = 0x00F1
-	odsSelected  = 0x0001
-	odsDisabled  = 0x0004
-	odsFocus     = 0x0010
-	odsHotlight  = 0x0040
 )
 
 type placedCheck struct {
@@ -38,9 +37,27 @@ type placedCheck struct {
 }
 
 type placedBtn struct {
-	rc   win.RECT
-	text string
-	show bool
+	rc      win.RECT
+	text    string
+	access  string
+	show    bool
+	primary bool
+}
+
+type actionPlace struct {
+	rc      win.RECT
+	caption string
+	access  string
+	show    bool
+	style   int
+	kind    int
+	id      string
+	index   int
+	bg      win.COLORREF
+	fg      win.COLORREF
+	edge    win.COLORREF
+	detail  string
+	tip     string
 }
 
 type navSlot struct {
@@ -48,28 +65,6 @@ type navSlot struct {
 	rc     win.RECT
 	group  string
 	groupY int
-}
-
-type drawItemStruct struct {
-	CtlType    uint32
-	CtlID      uint32
-	ItemID     uint32
-	ItemAction uint32
-	ItemState  uint32
-	HwndItem   win.HWND
-	HDC        win.HDC
-	RcItem     win.RECT
-	ItemData   uintptr
-}
-
-func mouseClient(hwnd win.HWND, lParam uintptr) (int, int) {
-	var pt win.POINT
-	user32.NewProc("GetCursorPos").Call(uintptr(unsafe.Pointer(&pt)))
-	user32.NewProc("ScreenToClient").Call(uintptr(hwnd), uintptr(unsafe.Pointer(&pt)))
-	if pt.X != 0 || pt.Y != 0 {
-		return int(pt.X), int(pt.Y)
-	}
-	return int(int16(lParam)), int(int16(lParam >> 16))
 }
 
 func setDPIAware() {
@@ -132,7 +127,7 @@ func (a *app) applyControlFonts() {
 	for _, hwnd := range a.navBtns {
 		a.applyType(hwnd, ui.TypeNav)
 	}
-	for _, hwnd := range []win.HWND{a.btnScan, a.btnClean, a.btnSelect, a.btnWork, a.btnAdmin} {
+	for _, hwnd := range []win.HWND{a.btnScan, a.btnClean, a.btnWork, a.btnAdmin} {
 		a.applyType(hwnd, ui.TypeButton)
 	}
 	for _, hwnd := range a.checkBtns {
@@ -141,12 +136,17 @@ func (a *app) applyControlFonts() {
 	for _, hwnd := range a.detailBtns {
 		a.applyType(hwnd, ui.TypeButton)
 	}
+	for _, hwnd := range a.actBtns {
+		a.applyType(hwnd, ui.TypeButton)
+	}
 }
 
 func createBtn(parent win.HWND, id int, style uint32, label string) win.HWND {
-	return win.CreateWindowEx(0, u16("BUTTON"), u16(label),
+	hwnd := win.CreateWindowEx(0, u16("BUTTON"), u16(label),
 		win.WS_CHILD|win.WS_TABSTOP|win.WS_CLIPSIBLINGS|style,
 		0, 0, 10, 10, parent, win.HMENU(id), win.GetModuleHandle(nil), nil)
+	prepareControl(hwnd)
+	return hwnd
 }
 
 func (a *app) ensureControls() {
@@ -165,7 +165,6 @@ func (a *app) ensureControls() {
 	if a.btnScan == 0 {
 		a.btnScan = createBtn(a.win, idFootScan, bsDefPush, "开始扫描")
 		a.btnClean = createBtn(a.win, idFootClean, bsPushButton, "开始清理")
-		a.btnSelect = createBtn(a.win, idFootSel, bsPushButton, "全选")
 		a.btnWork = createBtn(a.win, idFootWork, bsPushButton, "开始分析")
 		a.btnAdmin = createBtn(a.win, idFootAdmin, bsPushButton, "以管理员运行")
 		a.applyControlFonts()
@@ -181,14 +180,23 @@ func (a *app) placeBtn(hwnd win.HWND, rc win.RECT, label string, show, enabled b
 		return
 	}
 	setText(hwnd, label)
+	kind := faceSecondary
+	if hwnd == a.btnClean || hwnd == a.btnWork || (hwnd == a.btnScan && a.scanPrimary()) {
+		kind = facePrimary
+	}
+	setFace(hwnd, ctrlFace{kind: kind, caption: label})
 	win.EnableWindow(hwnd, enabled)
-	win.MoveWindow(hwnd, rc.Left, rc.Top, rc.Right-rc.Left, rc.Bottom-rc.Top, true)
+	win.MoveWindow(hwnd, rc.Left, rc.Top, rc.Right-rc.Left, rc.Bottom-rc.Top, false)
 	win.ShowWindow(hwnd, win.SW_SHOW)
+}
+
+func (a *app) scanPrimary() bool {
+	return a.page == ui.PageOverview || !a.scanned || a.phase == phaseScan || a.phase == phaseClean
 }
 
 func (a *app) navSlots(nav win.RECT) []navSlot {
 	var slots []navSlot
-	y := int(nav.Top) + a.scale(60)
+	y := int(nav.Top) + a.scale(72)
 	for _, g := range ui.NavGroups() {
 		groupY := y
 		y += a.scale(20)
@@ -229,7 +237,9 @@ func (a *app) layoutNative(client win.RECT) {
 		if !ok {
 			continue
 		}
-		a.placeBtn(a.navBtns[i], rc, item.Title, true, true)
+		current := a.page == item.Page
+		a.placeBtn(a.navBtns[i], rc, ui.NavAccessName(item.Title, current), true, true)
+		setFace(a.navBtns[i], ctrlFace{kind: faceNav, caption: item.Title, icon: item.Icon, selected: current, bg: colorNav})
 	}
 	busy := a.busy()
 	pad := a.scale(16)
@@ -251,19 +261,18 @@ func (a *app) layoutNative(client win.RECT) {
 	cleanLabel := ui.CleanActionLabel(count, reclaim, unknown)
 	a.placeBtn(a.btnScan, rect(0, 0, 0, 0), scanLabel, false, true)
 	a.placeBtn(a.btnClean, rect(0, 0, 0, 0), cleanLabel, false, true)
-	a.placeBtn(a.btnSelect, rect(0, 0, 0, 0), a.selectLabel(), false, true)
 	a.placeBtn(a.btnWork, rect(0, 0, 0, 0), "", false, true)
 	a.placeBtn(a.btnAdmin, rect(0, 0, 0, 0), "以管理员运行", false, true)
 	right := int(client.Right) - pad
-	switch a.page {
-	case ui.PageOverview:
+	switch ui.FooterMode(a.page) {
+	case ui.FooterOverview:
 		sw := a.btnW(scanLabel)
 		a.placeBtn(a.btnScan, rect(right-sw, fy, right, fy+btnH), scanLabel, true, true)
 		if !a.elevated {
 			aw := a.btnW("以管理员运行")
 			a.placeBtn(a.btnAdmin, rect(right-sw-a.scale(12)-aw, fy, right-sw-a.scale(12), fy+btnH), "以管理员运行", true, !busy)
 		}
-	case ui.PageClean:
+	case ui.FooterClean:
 		if busy && (a.phase == phaseScan || a.phase == phaseClean) {
 			sw := a.btnW(scanLabel)
 			a.placeBtn(a.btnScan, rect(right-sw, fy, right, fy+btnH), scanLabel, true, true)
@@ -276,29 +285,38 @@ func (a *app) layoutNative(client win.RECT) {
 			a.placeBtn(a.btnClean, rect(right-cw, fy, right, fy+btnH), cleanLabel, true, !busy && count > 0)
 			a.placeBtn(a.btnScan, rect(right-cw-a.scale(12)-sw, fy, right-cw-a.scale(12), fy+btnH), scanLabel, true, true)
 		}
-		if a.selShow {
-			a.placeBtn(a.btnSelect, a.selRC, a.selectLabel(), true, !busy && a.scanned)
+	case ui.FooterAnalyze:
+		if a.page == ui.PageLarge {
+			label := "开始分析"
+			if a.phase == phaseAnalyze {
+				label = "取消分析"
+			}
+			a.placeBtn(a.btnWork, rect(fx, fy, fx+a.btnW(label), fy+btnH), label, true, true)
 		}
-	case ui.PageAnalyze:
-		label := "开始分析"
-		if a.phase == phaseAnalyze {
-			label = "取消分析"
-		}
-		a.placeBtn(a.btnWork, rect(fx, fy, fx+a.btnW(label), fy+btnH), label, true, true)
-	case ui.PageDupes:
+	case ui.FooterDupes:
 		label := "查找重复"
 		if a.phase == phaseDupes {
 			label = "取消查找"
 		}
 		a.placeBtn(a.btnWork, rect(fx, fy, fx+a.btnW(label), fy+btnH), label, true, true)
-	case ui.PageApps:
+	case ui.FooterApps:
 		a.placeBtn(a.btnWork, rect(fx, fy, fx+a.btnW("刷新软件列表"), fy+btnH), "刷新软件列表", true, !busy)
-	case ui.PageSystem:
+	case ui.FooterSystem:
 		a.placeBtn(a.btnWork, rect(fx, fy, fx+a.btnW("刷新系统占用"), fy+btnH), "刷新系统占用", true, !busy)
 	}
-	a.layoutChecks(client)
-	a.flushChecks()
-	a.flushDetails()
+	footerH := int32(a.scale(ui.FooterH))
+	scrollW := int32(a.scale(ui.ScrollBarW))
+	hostH := client.Bottom - footerH
+	if hostH < 0 {
+		hostH = 0
+	}
+	a.viewH = int(hostH)
+	if a.host != 0 {
+		win.MoveWindow(a.host, nav.Right, 0, client.Right-nav.Right-scrollW, hostH, false)
+	}
+	if a.scrollBar != 0 {
+		win.MoveWindow(a.scrollBar, client.Right-scrollW, 0, scrollW, hostH, false)
+	}
 }
 
 func (a *app) btnW(label string) int {
@@ -323,14 +341,14 @@ func (a *app) layoutChecks(client win.RECT) {
 	}
 	for len(a.checkBtns) < need {
 		id := idCheckBase + len(a.checkBtns)
-		hwnd := createBtn(a.win, id, bsAutoCheck, "")
+		hwnd := createBtn(a.host, id, bsAutoCheck, "")
 		a.applyType(hwnd, ui.TypeItem)
 		a.checkBtns = append(a.checkBtns, hwnd)
 	}
 	if a.page == ui.PageClean && a.scanned {
 		for len(a.detailBtns) < len(a.reports) {
 			id := idDetailBase + len(a.detailBtns)
-			hwnd := createBtn(a.win, id, bsPushButton, "详情")
+			hwnd := createBtn(a.host, id, bsPushButton, "详情")
 			a.applyType(hwnd, ui.TypeButton)
 			a.detailBtns = append(a.detailBtns, hwnd)
 		}
@@ -376,19 +394,42 @@ func (a *app) applyCheck(i int, p placedCheck) {
 		return
 	}
 	name := ""
+	advanced := false
+	recommend := false
 	if a.page == ui.PageClean && i < len(a.reports) {
-		name = a.reports[i].Category.Name
+		cat := a.reports[i].Category
+		name = cat.Name
+		advanced = ui.CleanSection(cat) == ui.SectionAdvanced
+		recommend = ui.CleanSection(cat) == ui.SectionRecommend
 	}
 	if a.page == ui.PageSettings && i < len(a.settingCats) {
 		cat := a.settingCats[i]
-		name = cat.Name + " · " + ui.RiskText(cat.Risk)
-		if ui.CleanSection(cat) == ui.SectionAdvanced {
-			name += " · 默认关闭"
-		}
+		name = cat.Name
+		advanced = ui.CleanSection(cat) == ui.SectionAdvanced
 	}
+	caption := name
+	access := name
 	if name != "" {
-		setText(hwnd, name)
+		risk := ""
+		if a.page == ui.PageClean && i < len(a.reports) {
+			risk = ui.RiskText(a.reports[i].Category.Risk)
+		}
+		if a.page == ui.PageSettings && i < len(a.settingCats) {
+			risk = ui.RiskText(a.settingCats[i].Risk)
+		}
+		access = ui.ChoiceAccessName(name, risk, advanced)
+		if a.page == ui.PageSettings {
+			caption = access
+		}
+		setText(hwnd, access)
 	}
+	bg := colorCard
+	if advanced {
+		bg = colorAdvBg
+	} else if recommend {
+		bg = colorRecBg
+	}
+	setFace(hwnd, ctrlFace{kind: faceCheck, caption: caption, bg: bg})
 	cur := win.SendMessage(hwnd, bmGetCheck, 0, 0) != 0
 	if cur != p.on {
 		state := uintptr(0)
@@ -397,11 +438,7 @@ func (a *app) applyCheck(i int, p placedCheck) {
 		}
 		win.SendMessage(hwnd, bmSetCheck, state, 0)
 	}
-	if a.obscuredByFooter(p.rc) {
-		win.ShowWindow(hwnd, win.SW_HIDE)
-		return
-	}
-	win.MoveWindow(hwnd, p.rc.Left, p.rc.Top, p.rc.Right-p.rc.Left, p.rc.Bottom-p.rc.Top, true)
+	win.MoveWindow(hwnd, p.rc.Left, p.rc.Top, p.rc.Right-p.rc.Left, p.rc.Bottom-p.rc.Top, false)
 	win.ShowWindow(hwnd, win.SW_SHOW)
 }
 
@@ -427,22 +464,19 @@ func (a *app) applyDetail(i int, p placedBtn) {
 	if hwnd == 0 {
 		return
 	}
-	if !p.show || a.obscuredByFooter(p.rc) {
+	if !p.show {
 		win.ShowWindow(hwnd, win.SW_HIDE)
 		return
 	}
-	setText(hwnd, p.text)
-	win.MoveWindow(hwnd, p.rc.Left, p.rc.Top, p.rc.Right-p.rc.Left, p.rc.Bottom-p.rc.Top, true)
-	win.ShowWindow(hwnd, win.SW_SHOW)
-}
-
-func (a *app) obscuredByFooter(rc win.RECT) bool {
-	if a.win == 0 {
-		return false
+	name := ""
+	if i < len(a.reports) {
+		name = a.reports[i].Category.Name
 	}
-	var client win.RECT
-	win.GetClientRect(a.win, &client)
-	return rc.Bottom > client.Bottom-int32(a.scale(ui.FooterH))
+	access := ui.DetailAccessName(name, p.text == "收起")
+	setText(hwnd, access)
+	setFace(hwnd, ctrlFace{kind: faceSecondary, caption: p.text})
+	win.MoveWindow(hwnd, p.rc.Left, p.rc.Top, p.rc.Right-p.rc.Left, p.rc.Bottom-p.rc.Top, false)
+	win.ShowWindow(hwnd, win.SW_SHOW)
 }
 
 func (a *app) isCheck(hwnd win.HWND) bool {
@@ -454,27 +488,33 @@ func (a *app) isCheck(hwnd win.HWND) bool {
 	return false
 }
 
-func (a *app) eachNative(fn func(win.HWND)) {
+func (a *app) eachShell(fn func(win.HWND)) {
 	for _, h := range a.navBtns {
 		fn(h)
 	}
+	for _, h := range []win.HWND{a.btnScan, a.btnClean, a.btnWork, a.btnAdmin, a.scrollBar} {
+		fn(h)
+	}
+}
+
+func (a *app) eachPage(fn func(win.HWND)) {
 	for _, h := range a.checkBtns {
 		fn(h)
 	}
 	for _, h := range a.detailBtns {
 		fn(h)
 	}
-	for _, h := range []win.HWND{a.btnScan, a.btnClean, a.btnSelect, a.btnWork, a.btnAdmin} {
+	for _, h := range a.actBtns {
 		fn(h)
 	}
 }
 
-func (a *app) excludeChildren(hdc win.HDC) {
-	if hdc == 0 || a.win == 0 {
+func excludeList(hdc win.HDC, parent win.HWND, each func(func(win.HWND))) {
+	if hdc == 0 || parent == 0 {
 		return
 	}
 	excl := gdi32.NewProc("ExcludeClipRect")
-	a.eachNative(func(hwnd win.HWND) {
+	each(func(hwnd win.HWND) {
 		if hwnd == 0 || !win.IsWindowVisible(hwnd) {
 			return
 		}
@@ -482,20 +522,39 @@ func (a *app) excludeChildren(hdc win.HDC) {
 		win.GetWindowRect(hwnd, &wr)
 		tl := win.POINT{X: wr.Left, Y: wr.Top}
 		br := win.POINT{X: wr.Right, Y: wr.Bottom}
-		user32.NewProc("ScreenToClient").Call(uintptr(a.win), uintptr(unsafe.Pointer(&tl)))
-		user32.NewProc("ScreenToClient").Call(uintptr(a.win), uintptr(unsafe.Pointer(&br)))
+		user32.NewProc("ScreenToClient").Call(uintptr(parent), uintptr(unsafe.Pointer(&tl)))
+		user32.NewProc("ScreenToClient").Call(uintptr(parent), uintptr(unsafe.Pointer(&br)))
 		excl.Call(uintptr(hdc), uintptr(tl.X), uintptr(tl.Y), uintptr(br.X), uintptr(br.Y))
 	})
 }
 
-func (a *app) refreshChildren() {
-	a.eachNative(func(hwnd win.HWND) {
+func (a *app) excludeShell(hdc win.HDC) {
+	excludeList(hdc, a.win, a.eachShell)
+	if a.host != 0 && win.IsWindowVisible(a.host) {
+		excludeList(hdc, a.win, func(fn func(win.HWND)) { fn(a.host) })
+	}
+}
+
+func (a *app) excludePage(hdc win.HDC) {
+	excludeList(hdc, a.host, a.eachPage)
+}
+
+func refreshList(each func(func(win.HWND))) {
+	each(func(hwnd win.HWND) {
 		if hwnd == 0 || !win.IsWindowVisible(hwnd) {
 			return
 		}
-		win.InvalidateRect(hwnd, nil, true)
+		win.InvalidateRect(hwnd, nil, false)
 		win.UpdateWindow(hwnd)
 	})
+}
+
+func (a *app) refreshShell() {
+	refreshList(a.eachShell)
+}
+
+func (a *app) refreshPage() {
+	refreshList(a.eachPage)
 }
 
 func (a *app) hasNativeNav() bool {
@@ -510,69 +569,6 @@ func (a *app) hasNativeCheck(i int) bool {
 	return i >= 0 && i < len(a.checkBtns) && a.checkBtns[i] != 0
 }
 
-func (a *app) drawItem(lParam uintptr) {
-	if lParam == 0 {
-		return
-	}
-	dis := (*drawItemStruct)(unsafe.Pointer(lParam))
-	hdc := dis.HDC
-	rc := dis.RcItem
-	enabled := dis.ItemState&odsDisabled == 0
-	focus := dis.ItemState&odsFocus != 0
-	hot := dis.ItemState&odsHotlight != 0 || dis.ItemState&odsSelected != 0
-	id := int(dis.CtlID)
-	label := windowText(dis.HwndItem)
-	win.SetBkMode(hdc, win.TRANSPARENT)
-	if id >= idNavBase && id < idNavBase+32 {
-		page := id - idNavBase
-		if a.page == page {
-			roundFill(hdc, rc, ui.Radius, colorNavPick, colorNavPick)
-			bar := rc
-			bar.Right = bar.Left + 3
-			roundFill(hdc, bar, 2, colorPrimary, colorPrimary)
-			win.SetTextColor(hdc, colorPrimary)
-		} else if hot {
-			roundFill(hdc, rc, ui.Radius, colorPrimarySoft, colorPrimarySoft)
-			win.SetTextColor(hdc, colorText)
-		} else {
-			roundFill(hdc, rc, ui.Radius, colorNav, colorNav)
-			win.SetTextColor(hdc, colorText)
-		}
-		icon := "settings"
-		for _, item := range ui.NavItems() {
-			if item.Page == page {
-				icon = item.Icon
-				break
-			}
-		}
-		paintIcon(hdc, rect(int(rc.Left)+8, int(rc.Top)+8, int(rc.Left)+28, int(rc.Bottom)-8), icon, colorText)
-		a.useType(hdc, ui.TypeNav)
-		draw(hdc, label, rect(int(rc.Left)+32, int(rc.Top), int(rc.Right)-8, int(rc.Bottom)), win.DT_LEFT|dtSingleLine|dtVCenter|dtNoPrefix)
-		if focus {
-			paintFocus(hdc, rc)
-		}
-		return
-	}
-	primary := id == idFootScan && (a.page == ui.PageOverview || !a.scanned || a.phase == phaseScan || a.phase == phaseClean)
-	if id == idFootClean || id == idFootWork {
-		primary = enabled
-	}
-	if id == idFootWork && a.page != ui.PageAnalyze && a.page != ui.PageDupes {
-		primary = enabled
-	}
-	if id == idFootSel || id == idFootAdmin {
-		primary = false
-	}
-	if primary && enabled {
-		paintPrimaryBtn(hdc, rc, label, true)
-	} else {
-		paintGhostBtn(hdc, rc, label, enabled)
-	}
-	if focus {
-		paintFocus(hdc, rc)
-	}
-}
-
 func windowText(hwnd win.HWND) string {
 	var buf [128]uint16
 	n, _, _ := user32.NewProc("GetWindowTextW").Call(uintptr(hwnd), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
@@ -582,9 +578,13 @@ func windowText(hwnd win.HWND) string {
 	return windows.UTF16ToString(buf[:n])
 }
 
-func (a *app) onCommand(wParam uintptr) {
+func (a *app) onCommand(wParam, lParam uintptr) {
 	id := int(uint16(wParam))
 	notify := uint16(wParam >> 16)
+	if notify == 6 { // BN_SETFOCUS
+		a.revealControl(win.HWND(lParam))
+		return
+	}
 	if notify != 0 {
 		return
 	}
@@ -605,12 +605,185 @@ func (a *app) onCommand(wParam uintptr) {
 		a.clickCheck(id - idCheckBase)
 	case id >= idDetailBase && id < idDetailBase+512:
 		a.clickDetail(id - idDetailBase)
+	case id >= idActionBase && id < idActionBase+actionCap:
+		a.runAction(id - idActionBase)
+	}
+}
+
+func (a *app) runAction(index int) {
+	if index < 0 || index >= len(a.actLaid) {
+		return
+	}
+	p := a.actLaid[index]
+	a.onClickHit(hit{kind: p.kind, index: p.index, id: p.id})
+}
+
+func (a *app) placeAction(rc win.RECT, caption, access string, kind, index int, id string, style int) {
+	if len(a.actLaid) >= actionCap || rc.Right <= rc.Left || rc.Bottom <= rc.Top {
+		return
+	}
+	if access == "" {
+		access = caption
+	}
+	a.actLaid = append(a.actLaid, actionPlace{
+		rc: rc, caption: caption, access: access, show: true, style: style, kind: kind, id: id, index: index,
+	})
+}
+
+func (a *app) flushActions() {
+	parent := a.host
+	if parent == 0 {
+		return
+	}
+	for len(a.actBtns) < len(a.actLaid) {
+		hwnd := createBtn(parent, idActionBase+len(a.actBtns), bsPushButton, "")
+		a.applyType(hwnd, ui.TypeButton)
+		a.actBtns = append(a.actBtns, hwnd)
+	}
+	for i, hwnd := range a.actBtns {
+		if hwnd == 0 {
+			continue
+		}
+		if i >= len(a.actLaid) || !a.actLaid[i].show {
+			win.ShowWindow(hwnd, win.SW_HIDE)
+			continue
+		}
+		p := a.actLaid[i]
+		setText(hwnd, p.access)
+		setFace(hwnd, ctrlFace{
+			kind: p.style, caption: p.caption, bg: p.bg, fg: p.fg, edge: p.edge, detail: p.detail, tip: p.tip,
+		})
+		win.EnableWindow(hwnd, true)
+		win.MoveWindow(hwnd, p.rc.Left, p.rc.Top, p.rc.Right-p.rc.Left, p.rc.Bottom-p.rc.Top, false)
+		win.ShowWindow(hwnd, win.SW_SHOW)
+	}
+}
+
+func contentProc(hwnd, msg, wParam, lParam uintptr) uintptr {
+	if uiPtr == nil {
+		return win.DefWindowProc(win.HWND(hwnd), uint32(msg), wParam, lParam)
+	}
+	return uiPtr.hostProc(win.HWND(hwnd), uint32(msg), wParam, lParam)
+}
+
+func (a *app) hostProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
+	switch msg {
+	case win.WM_ERASEBKGND:
+		return 1
+	case win.WM_PAINT:
+		a.paintHost()
+		return 0
+	case win.WM_COMMAND:
+		a.onCommand(wParam, lParam)
+		return 0
+	case win.WM_MOUSEWHEEL:
+		a.onWheel(int16(wParam >> 16))
+		return 0
+	}
+	return win.DefWindowProc(hwnd, msg, wParam, lParam)
+}
+
+func (a *app) revealControl(hwnd win.HWND) {
+	if hwnd == 0 || a.host == 0 || win.GetParent(hwnd) != a.host {
+		return
+	}
+	var wr win.RECT
+	win.GetWindowRect(hwnd, &wr)
+	top := win.POINT{X: wr.Left, Y: wr.Top}
+	bot := win.POINT{X: wr.Left, Y: wr.Bottom}
+	screenToClient(a.host, &top)
+	screenToClient(a.host, &bot)
+	margin := int32(a.scale(8))
+	var client win.RECT
+	win.GetClientRect(a.host, &client)
+	delta := 0
+	if top.Y < margin {
+		delta = int(top.Y - margin)
+	} else if bot.Y > client.Bottom-margin {
+		delta = int(bot.Y - (client.Bottom - margin))
+	}
+	if delta != 0 {
+		a.scrollBy(delta)
+	}
+}
+
+func screenToClient(hwnd win.HWND, pt *win.POINT) {
+	user32.NewProc("ScreenToClient").Call(uintptr(hwnd), uintptr(unsafe.Pointer(pt)))
+}
+
+type scrollInfo struct {
+	cbSize    uint32
+	fMask     uint32
+	nMin      int32
+	nMax      int32
+	nPage     uint32
+	nPos      int32
+	nTrackPos int32
+}
+
+var (
+	procSetScrollInfo = user32.NewProc("SetScrollInfo")
+	procGetScrollInfo = user32.NewProc("GetScrollInfo")
+)
+
+func (a *app) updateScrollBar() {
+	if a.scrollBar == 0 {
+		return
+	}
+	view := a.viewH
+	if view < 1 {
+		view = 1
+	}
+	max := a.contentH
+	if max < 1 {
+		max = 1
+	}
+	info := scrollInfo{
+		cbSize: uint32(unsafe.Sizeof(scrollInfo{})),
+		fMask:  0x17,
+		nMin:   0,
+		nMax:   int32(max - 1),
+		nPage:  uint32(view),
+		nPos:   int32(a.scroll),
+	}
+	procSetScrollInfo.Call(uintptr(a.scrollBar), 2, uintptr(unsafe.Pointer(&info)), 1)
+	if a.contentH <= a.viewH {
+		win.ShowWindow(a.scrollBar, win.SW_HIDE)
+		return
+	}
+	win.ShowWindow(a.scrollBar, win.SW_SHOW)
+}
+
+func (a *app) onVScroll(wParam uintptr) {
+	code := int(wParam & 0xffff)
+	line := a.scale(48)
+	view := a.viewH
+	if view < line {
+		view = line
+	}
+	switch code {
+	case 0:
+		a.scrollBy(-line)
+	case 1:
+		a.scrollBy(line)
+	case 2:
+		a.scrollBy(-view)
+	case 3:
+		a.scrollBy(view)
+	case 4, 5:
+		info := scrollInfo{cbSize: uint32(unsafe.Sizeof(scrollInfo{})), fMask: 0x10}
+		procGetScrollInfo.Call(uintptr(a.scrollBar), 2, uintptr(unsafe.Pointer(&info)))
+		a.scrollTo(int(info.nTrackPos))
+	case 6:
+		a.scrollTo(0)
+	case 7:
+		a.scrollTo(a.contentH)
 	}
 }
 
 func (a *app) clickWork() {
 	switch a.page {
-	case ui.PageAnalyze:
+	case ui.PageAnalyze, ui.PageLarge:
 		a.onClickHit(hit{kind: hitAnalyze})
 	case ui.PageDupes:
 		a.onClickHit(hit{kind: hitDupes})

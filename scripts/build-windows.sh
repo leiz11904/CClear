@@ -8,7 +8,14 @@ if [ -z "$VERSION" ]; then
   exit 1
 fi
 
+python3 -m pip install --disable-pip-version-check --quiet Pillow
 python3 scripts/genicon.py
+
+(
+  cd frontend
+  npm ci
+  npm run build
+)
 
 GV="$(go env GOPATH)/bin/goversioninfo"
 if [ ! -x "$GV" ]; then
@@ -17,9 +24,9 @@ if [ ! -x "$GV" ]; then
 fi
 
 (
-  cd cmd/cclear
+  cd cmd/cclear-modern
   "$GV" -64 \
-    -icon ../../assets/cclear.ico \
+    -icon ../../assets/cclear-v3.ico \
     -manifest ../../assets/cclear.manifest \
     -o rsrc_windows_amd64.syso
 )
@@ -27,7 +34,7 @@ fi
 (
   cd cmd/setup
   "$GV" -64 \
-    -icon ../../assets/cclear.ico \
+    -icon ../../assets/cclear-v3.ico \
     -manifest ../../assets/setup.manifest \
     -o rsrc_windows_amd64.syso
 )
@@ -35,7 +42,7 @@ fi
 mkdir -p dist
 rm -f dist/cclear.exe "dist/CClear-Setup-${VERSION}.exe" "dist/cclear-${VERSION}.exe"
 GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-  go build -trimpath -ldflags "-s -w -H windowsgui" -o dist/cclear.exe ./cmd/cclear
+  go build -tags production -trimpath -ldflags "-s -w -H windowsgui" -o dist/cclear.exe ./cmd/cclear-modern
 GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
   go build -trimpath -ldflags "-s -w -H windowsgui" -o "dist/CClear-Setup-${VERSION}.exe" ./cmd/setup
 GOTOOLCHAIN=local go run ./cmd/pack "dist/CClear-Setup-${VERSION}.exe" dist/cclear.exe
@@ -65,3 +72,9 @@ if b"requireAdministrator" not in setup:
     raise SystemExit("setup manifest is missing requireAdministrator")
 print(f"Built dist/cclear.exe ({len(app)} bytes) and dist/CClear-Setup-{version}.exe ({len(setup)} bytes)")
 PY
+
+# Generated resources carry the installer's elevation manifest. Keeping them out
+# of package directories prevents later `go test ./...` runs from inheriting it.
+mkdir -p .tmp/windows-resources
+mv cmd/cclear-modern/rsrc_windows_amd64.syso .tmp/windows-resources/cclear-modern.syso
+mv cmd/setup/rsrc_windows_amd64.syso .tmp/windows-resources/setup.syso

@@ -45,7 +45,7 @@ func TestScanSkipsSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
-		t.Fatal(err)
+		t.Skip("NOT RUN: symlink creation failed: " + err.Error())
 	}
 	if err := os.WriteFile(filepath.Join(root, "keep.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)

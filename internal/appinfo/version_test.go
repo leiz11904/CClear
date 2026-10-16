@@ -9,7 +9,7 @@ import (
 )
 
 func TestVersionIsNotMarkedWindowsVerified(t *testing.T) {
-	if Version != "2.7.0" {
+	if Version != "3.0.0" {
 		t.Fatalf("version %s", Version)
 	}
 	if WindowsNativeVerified {

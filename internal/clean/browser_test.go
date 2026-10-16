@@ -27,10 +27,10 @@ func TestDiscoverBrowserCachesSkipsProfilesAndPrivateData(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(userData, "Profile 1")); err != nil {
-		t.Fatal(err)
+		t.Skip("NOT RUN: symlink creation failed: " + err.Error())
 	}
 	if err := os.Symlink(outside, filepath.Join(userData, "Default", "GPUCache")); err != nil {
-		t.Fatal(err)
+		t.Skip("NOT RUN: symlink creation failed: " + err.Error())
 	}
 
 	got := DiscoverBrowserCaches(local)

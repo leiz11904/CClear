@@ -105,12 +105,17 @@ func TestNativeDeleteUsesTheVerifiedHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer windows.CloseHandle(handle)
 	live, err := snapshotHandle(handle)
 	if err != nil || !snap.ID.Same(live.ID) {
+		windows.CloseHandle(handle)
 		t.Fatal("handle identity did not match the snapshot")
 	}
 	if err := dispose(handle); err != nil {
+		windows.CloseHandle(handle)
+		t.Fatal(err)
+	}
+	// FileDispositionInfo removes the file when the last handle closes.
+	if err := windows.CloseHandle(handle); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {

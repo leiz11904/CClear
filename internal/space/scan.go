@@ -178,6 +178,7 @@ func Scan(ctx context.Context, root string, onProgress func(files int, where str
 			}
 			d.logical += logical
 			d.allocated += alloc
+			d.files++
 			p = d.parent
 		}
 		rep.Files++

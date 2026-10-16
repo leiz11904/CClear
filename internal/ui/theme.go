@@ -38,60 +38,60 @@ type Theme struct {
 func Light() Theme {
 	return Theme{
 		Name:        "light",
-		Bg:          RGB(243, 245, 246),
+		Bg:          RGB(243, 243, 243),
 		Card:        RGB(255, 255, 255),
-		Primary:     RGB(42, 122, 130),
-		PrimarySoft: RGB(231, 242, 243),
-		Text:        RGB(22, 28, 30),
-		Muted:       RGB(55, 67, 72),
-		Caption:     RGB(70, 82, 88),
-		Disabled:    RGB(132, 142, 146),
-		Line:        RGB(226, 232, 234),
-		Nav:         RGB(248, 250, 250),
-		NavPick:     RGB(231, 242, 243),
-		NavText:     RGB(27, 36, 38),
+		Primary:     RGB(0, 95, 184),
+		PrimarySoft: RGB(232, 242, 251),
+		Text:        RGB(27, 27, 27),
+		Muted:       RGB(82, 82, 82),
+		Caption:     RGB(96, 96, 96),
+		Disabled:    RGB(140, 140, 140),
+		Line:        RGB(224, 224, 224),
+		Nav:         RGB(249, 249, 249),
+		NavPick:     RGB(232, 242, 251),
+		NavText:     RGB(27, 27, 27),
 		Danger:      RGB(196, 43, 28),
-		Warning:     RGB(196, 122, 18),
+		Warning:     RGB(157, 93, 0),
 		Success:     RGB(15, 123, 58),
 		Footer:      RGB(255, 255, 255),
 		AdvancedBg:  RGB(255, 248, 240),
-		RecommendBg: RGB(244, 250, 246),
-		Focus:       RGB(42, 122, 130),
+		RecommendBg: RGB(243, 248, 244),
+		Focus:       RGB(0, 95, 184),
 		OnPrimary:   RGB(255, 255, 255),
-		MapA:        RGB(200, 224, 217),
-		MapB:        RGB(210, 222, 232),
-		MapC:        RGB(232, 220, 208),
-		MapD:        RGB(216, 208, 228),
+		MapA:        RGB(204, 224, 242),
+		MapB:        RGB(214, 228, 216),
+		MapC:        RGB(236, 224, 208),
+		MapD:        RGB(220, 214, 232),
 	}
 }
 
 func Dark() Theme {
 	return Theme{
 		Name:        "dark",
-		Bg:          RGB(28, 31, 33),
-		Card:        RGB(37, 41, 44),
-		Primary:     RGB(74, 163, 171),
-		PrimarySoft: RGB(30, 51, 54),
-		Text:        RGB(242, 244, 245),
-		Muted:       RGB(176, 186, 190),
-		Caption:     RGB(154, 166, 171),
-		Disabled:    RGB(110, 118, 122),
-		Line:        RGB(52, 58, 62),
-		Nav:         RGB(22, 25, 27),
-		NavPick:     RGB(30, 51, 54),
-		NavText:     RGB(242, 244, 245),
-		Danger:      RGB(224, 90, 79),
-		Warning:     RGB(224, 160, 74),
-		Success:     RGB(76, 175, 122),
-		Footer:      RGB(37, 41, 44),
-		AdvancedBg:  RGB(58, 44, 30),
-		RecommendBg: RGB(30, 46, 40),
-		Focus:       RGB(74, 163, 171),
-		OnPrimary:   RGB(16, 24, 26),
-		MapA:        RGB(46, 72, 68),
-		MapB:        RGB(48, 62, 78),
-		MapC:        RGB(78, 62, 48),
-		MapD:        RGB(62, 52, 78),
+		Bg:          RGB(32, 32, 32),
+		Card:        RGB(43, 43, 43),
+		Primary:     RGB(96, 205, 255),
+		PrimarySoft: RGB(28, 52, 68),
+		Text:        RGB(255, 255, 255),
+		Muted:       RGB(200, 200, 200),
+		Caption:     RGB(196, 196, 196),
+		Disabled:    RGB(120, 120, 120),
+		Line:        RGB(64, 64, 64),
+		Nav:         RGB(28, 28, 28),
+		NavPick:     RGB(48, 48, 48),
+		NavText:     RGB(255, 255, 255),
+		Danger:      RGB(255, 153, 164),
+		Warning:     RGB(252, 225, 0),
+		Success:     RGB(108, 203, 95),
+		Footer:      RGB(43, 43, 43),
+		AdvancedBg:  RGB(58, 46, 32),
+		RecommendBg: RGB(32, 48, 38),
+		Focus:       RGB(96, 205, 255),
+		OnPrimary:   RGB(16, 16, 16),
+		MapA:        RGB(36, 64, 86),
+		MapB:        RGB(36, 62, 48),
+		MapC:        RGB(72, 56, 40),
+		MapD:        RGB(56, 48, 72),
 	}
 }
 
@@ -105,8 +105,8 @@ func Named(name string) Theme {
 const (
 	Space      = 8
 	Radius     = 8
-	NavWidth   = 200
-	FooterH    = 64
+	NavWidth   = 216
+	FooterH    = 56
 	ContentMax = 880
 	TitlePx    = 24
 	SectionPx  = 16

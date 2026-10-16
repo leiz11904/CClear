@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	classMain   = "CClearMainWindow"
-	classDetail = "CClearDetail"
+	classMain    = "CClearMainWindow"
+	classDetail  = "CClearDetail"
+	classContent = "CClearContentHost"
+	classTip     = "CClearMapTip"
 
 	lvmDeleteAll      = win.LVM_FIRST + 9
 	lvmSetColumnWidth = win.LVM_FIRST + 30
@@ -97,6 +99,11 @@ func fill(hdc win.HDC, rc win.RECT, brush win.HBRUSH) {
 }
 
 func draw(hdc win.HDC, text string, rc win.RECT, format uint32) {
+	if text == "" || rc.Right <= rc.Left || rc.Bottom <= rc.Top {
+		return
+	}
+	gdi32.NewProc("SetTextAlign").Call(uintptr(hdc), 0)
+	win.SetBkMode(hdc, win.TRANSPARENT)
 	ptr := u16(text)
 	win.DrawTextEx(hdc, ptr, -1, &rc, format, nil)
 	runtime.KeepAlive(ptr)

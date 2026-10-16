@@ -1,4 +1,7 @@
 dist/
+.tmp/
 *.syso
 *.exe
 .DS_Store
+frontend/node_modules/
+cmd/cclear-modern/ui/dist/

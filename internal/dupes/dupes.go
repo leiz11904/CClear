@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"cclear/internal/space"
 )
@@ -60,44 +61,88 @@ func skipDirName(name string) bool {
 	}
 }
 
-func walkFiles(ctx context.Context, root string, errors *[]string, fn func(path string, d fs.DirEntry) error) error {
-	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if ctx.Err() != nil {
-			return ctx.Err()
+func isExcluded(path string, exclude []string) bool {
+	clean := strings.ToLower(filepath.Clean(path))
+	for _, item := range exclude {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
 		}
-		if err != nil {
-			if len(*errors) < 8 {
-				*errors = append(*errors, err.Error())
-			}
-			if d != nil && d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
+		item = strings.ToLower(filepath.Clean(item))
+		if clean == item || strings.HasPrefix(clean, item+string(os.PathSeparator)) {
+			return true
 		}
-		if d.Type()&os.ModeSymlink != 0 {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			if skipDirName(d.Name()) && !equalFold(path, root) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		return fn(path, d)
-	})
+	}
+	return false
 }
+
+func walkFiles(ctx context.Context, roots []string, exclude []string, errors *[]string, fn func(path string, d fs.DirEntry) error) error {
+	for _, root := range roots {
+		root = filepath.Clean(root)
+		if root == "" || root == "." || isExcluded(root, exclude) {
+			continue
+		}
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err != nil {
+				if len(*errors) < 8 {
+					*errors = append(*errors, err.Error())
+				}
+				if d != nil && d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if isExcluded(path, exclude) && !equalFold(path, root) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.Type()&os.ModeSymlink != 0 {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.IsDir() {
+				if skipDirName(d.Name()) && !equalFold(path, root) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			return fn(path, d)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Progress reports a duplicate scan phase: enumerate, filter, or hash.
+type Progress func(phase string, files int, where string)
 
 // Find walks root and groups files by size, then by content hash.
 // Hard links with the same identity count as one file.
 func Find(ctx context.Context, root string, onProgress func(files int, where string)) Report {
+	return FindScoped(ctx, []string{root}, nil, func(_ string, files int, where string) {
+		if onProgress != nil {
+			onProgress(files, where)
+		}
+	})
+}
+
+// FindScoped walks roots, skips excluded directories, and groups files with the
+// same size-then-content procedure as Find. It never deletes files.
+func FindScoped(ctx context.Context, roots []string, exclude []string, onProgress Progress) Report {
 	rep := Report{Note: "重复文件按内容哈希确认。不会自动删除，也不会当作垃圾清理项。"}
 	counts := map[int64]int{}
 	seen := map[[2]uint64]bool{}
 	files := 0
-	err := walkFiles(ctx, root, &rep.Errors, func(path string, d fs.DirEntry) error {
+	err := walkFiles(ctx, roots, exclude, &rep.Errors, func(path string, d fs.DirEntry) error {
 		info, err := d.Info()
 		if err != nil || info.Size() < minSize {
 			return nil
@@ -116,10 +161,13 @@ func Find(ctx context.Context, root string, onProgress func(files int, where str
 		counts[info.Size()]++
 		files++
 		if onProgress != nil && files%400 == 0 {
-			onProgress(files, path)
+			onProgress("enumerate", files, path)
 		}
 		return nil
 	})
+	if onProgress != nil {
+		onProgress("enumerate", files, "")
+	}
 	if ctx.Err() != nil {
 		rep.Cancelled = true
 		rep.Note = "查找已取消。"
@@ -138,7 +186,10 @@ func Find(ctx context.Context, root string, onProgress func(files int, where str
 	bySize := map[int64][]Item{}
 	hashed := 0
 	seen = map[[2]uint64]bool{}
-	_ = walkFiles(ctx, root, &rep.Errors, func(path string, d fs.DirEntry) error {
+	if onProgress != nil {
+		onProgress("filter", files, "")
+	}
+	_ = walkFiles(ctx, roots, exclude, &rep.Errors, func(path string, d fs.DirEntry) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -182,6 +233,9 @@ func Find(ctx context.Context, root string, onProgress func(files int, where str
 		return rep
 	}
 
+	if onProgress != nil {
+		onProgress("hash", hashed, "")
+	}
 	for size, list := range bySize {
 		if len(list) < 2 {
 			continue

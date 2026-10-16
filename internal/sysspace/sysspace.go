@@ -8,11 +8,12 @@ import (
 
 // Item is a system occupancy that must not be deleted by CClear.
 type Item struct {
-	Name  string
-	Path  string
-	Bytes int64
-	Known bool
-	Note  string
+	Name   string
+	Path   string
+	Bytes  int64
+	Known  bool
+	Status string
+	Note   string
 }
 
 // Report is read-only system occupancy.
@@ -35,23 +36,34 @@ func Read(drive string) Report {
 	for _, item := range files {
 		info, err := os.Lstat(item.Path)
 		if err != nil {
-			item.Note += " 当前无法读取，可能需要管理员权限或不存在。"
+			switch {
+			case os.IsNotExist(err):
+				item.Status = "不存在"
+			case os.IsPermission(err):
+				item.Status = "权限不足"
+			default:
+				item.Status = "读取失败"
+			}
+			item.Note += " 状态：" + item.Status + "。"
 			rep.Items = append(rep.Items, item)
 			continue
 		}
 		item.Known = true
 		if info.IsDir() {
 			item.Bytes = -1
+			item.Status = "见磁盘分析"
 			item.Note += " 目录大小请在磁盘分析中查看，这里不直接遍历。"
 		} else {
 			item.Bytes = info.Size()
+			item.Status = "正常"
 		}
 		rep.Items = append(rep.Items, item)
 	}
 	rep.Items = append(rep.Items, Item{
-		Name: "系统保留存储",
-		Path: filepath.Join(drive, "Windows"),
-		Note: "Windows 没有稳定公开的接口给出保留存储准确字节数。这里不填写估计值，也不提供删除。请使用系统存储设置查看。",
+		Name:   "系统保留存储",
+		Path:   filepath.Join(drive, "Windows"),
+		Status: "未知",
+		Note:   "Windows 没有稳定公开的接口给出保留存储准确字节数。这里不填写估计值，也不提供删除。请使用系统存储设置查看。",
 	})
 	return rep
 }

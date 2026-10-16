@@ -18,10 +18,21 @@ var (
 	procEllipse     = gdi32.NewProc("Ellipse")
 	procPie         = gdi32.NewProc("Pie")
 	procCreatePen   = gdi32.NewProc("CreatePen")
+	procEllipticRgn = gdi32.NewProc("CreateEllipticRgn")
+	procSetWindowRgn = user32.NewProc("SetWindowRgn")
+	gdiplusDLL       = windows.NewLazySystemDLL("gdiplus.dll")
+	procGdipStartup  = gdiplusDLL.NewProc("GdiplusStartup")
+	procGdipFromHDC  = gdiplusDLL.NewProc("GdipCreateFromHDC")
+	procGdipDelGraph = gdiplusDLL.NewProc("GdipDeleteGraphics")
+	procGdipSmooth   = gdiplusDLL.NewProc("GdipSetSmoothingMode")
+	procGdipSolid    = gdiplusDLL.NewProc("GdipCreateSolidFill")
+	procGdipDelBrush = gdiplusDLL.NewProc("GdipDeleteBrush")
+	procGdipFillEll  = gdiplusDLL.NewProc("GdipFillEllipseI")
 	procSelectBrush = gdi32.NewProc("SelectObject")
 	procMoveTo      = gdi32.NewProc("MoveToEx")
 	procLineTo      = gdi32.NewProc("LineTo")
 	procSelectClip  = gdi32.NewProc("SelectClipRgn")
+	procTextExtent  = gdi32.NewProc("GetTextExtentPoint32W")
 	dwmapi          = windows.NewLazySystemDLL("dwmapi.dll")
 	procDwmSet      = dwmapi.NewProc("DwmSetWindowAttribute")
 )
@@ -113,6 +124,76 @@ func hline(hdc win.HDC, x1, x2, y int, color win.COLORREF) {
 	win.DeleteObject(win.HGDIOBJ(pen))
 }
 
+func vline(hdc win.HDC, x, y1, y2 int, color win.COLORREF) {
+	pen := createPen(color)
+	old := win.SelectObject(hdc, win.HGDIOBJ(pen))
+	procMoveTo.Call(uintptr(hdc), uintptr(x), uintptr(y1), 0)
+	procLineTo.Call(uintptr(hdc), uintptr(x), uintptr(y2))
+	win.SelectObject(hdc, old)
+	win.DeleteObject(win.HGDIOBJ(pen))
+}
+
+func shapeButton(hwnd win.HWND, round bool, w, h int32) {
+	if hwnd == 0 {
+		return
+	}
+	if !round || w < 4 || h < 4 {
+		procSetWindowRgn.Call(uintptr(hwnd), 0, 0)
+		return
+	}
+	rgn, _, _ := procEllipticRgn.Call(0, 0, uintptr(w+1), uintptr(h+1))
+	procSetWindowRgn.Call(uintptr(hwnd), rgn, 0)
+}
+
+type gdipStartupInput struct {
+	version           uint32
+	_                 uint32
+	debug             uintptr
+	suppressBackground int32
+	suppressCodecs    int32
+}
+
+var gdipToken uintptr
+
+func ensureGdiplus() bool {
+	if gdipToken != 0 {
+		return true
+	}
+	in := gdipStartupInput{version: 1}
+	st, _, _ := procGdipStartup.Call(uintptr(unsafe.Pointer(&gdipToken)), uintptr(unsafe.Pointer(&in)), 0)
+	return st == 0 && gdipToken != 0
+}
+
+func gdipARGB(c win.COLORREF) uintptr {
+	r := uint32(c) & 0xFF
+	g := (uint32(c) >> 8) & 0xFF
+	b := (uint32(c) >> 16) & 0xFF
+	return uintptr(0xFF000000 | r<<16 | g<<8 | b)
+}
+
+func fillSmoothEllipse(hdc win.HDC, rc win.RECT, color win.COLORREF) {
+	w := rc.Right - rc.Left
+	h := rc.Bottom - rc.Top
+	if w < 2 || h < 2 || !ensureGdiplus() {
+		fillEllipse(hdc, rc, color)
+		return
+	}
+	var g uintptr
+	if st, _, _ := procGdipFromHDC.Call(uintptr(hdc), uintptr(unsafe.Pointer(&g))); st != 0 || g == 0 {
+		fillEllipse(hdc, rc, color)
+		return
+	}
+	defer procGdipDelGraph.Call(g)
+	procGdipSmooth.Call(g, 4)
+	var brush uintptr
+	if st, _, _ := procGdipSolid.Call(gdipARGB(color), uintptr(unsafe.Pointer(&brush))); st != 0 || brush == 0 {
+		fillEllipse(hdc, rc, color)
+		return
+	}
+	defer procGdipDelBrush.Call(brush)
+	procGdipFillEll.Call(g, brush, uintptr(rc.Left), uintptr(rc.Top), uintptr(w), uintptr(h))
+}
+
 func fillEllipse(hdc win.HDC, rc win.RECT, color win.COLORREF) {
 	brush := solidBrush(color)
 	pen := createPen(color)
@@ -180,11 +261,14 @@ func paintPrimaryBtn(hdc win.HDC, rc win.RECT, label string, enabled bool) {
 	}
 	fill := colorPrimary
 	fg := colorOnPrimary
+	if analyzeHot() && enabled {
+		fill = rgb(16, 110, 196)
+	}
 	if !enabled {
 		fill = colorLine
 		fg = colorDisabled
 	}
-	roundFill(hdc, rc, ui.Radius, fill, fill)
+	roundFill(hdc, rc, 4, fill, fill)
 	win.SetTextColor(hdc, fg)
 	draw(hdc, label, rc, win.DT_CENTER|dtSingleLine|dtVCenter|dtNoPrefix)
 }
@@ -197,7 +281,13 @@ func paintGhostBtn(hdc win.HDC, rc win.RECT, label string, enabled bool) {
 	if !enabled {
 		fg = colorDisabled
 	}
-	roundFill(hdc, rc, ui.Radius, colorCard, colorLine)
+	fill := colorCard
+	border := colorLine
+	if analyzeHot() && enabled {
+		fill = colorPrimarySoft
+		border = colorPrimary
+	}
+	roundFill(hdc, rc, 4, fill, border)
 	win.SetTextColor(hdc, fg)
 	draw(hdc, label, rc, win.DT_CENTER|dtSingleLine|dtVCenter|dtNoPrefix)
 }
@@ -247,33 +337,51 @@ func paintIcon(hdc win.HDC, rc win.RECT, kind string, color win.COLORREF) {
 	cx := int(rc.Left+rc.Right) / 2
 	cy := int(rc.Top+rc.Bottom) / 2
 	s := int(rc.Right-rc.Left) / 3
+	stroke := func(x1, y1, x2, y2 int) {
+		procMoveTo.Call(uintptr(hdc), uintptr(x1), uintptr(y1), 0)
+		procLineTo.Call(uintptr(hdc), uintptr(x2), uintptr(y2))
+	}
+	box := func(l, t, r, b int) {
+		stroke(l, t, r, t)
+		stroke(r, t, r, b)
+		stroke(r, b, l, b)
+		stroke(l, b, l, t)
+	}
 	switch kind {
 	case "home":
-		procMoveTo.Call(uintptr(hdc), uintptr(cx-s), uintptr(cy), 0)
-		procLineTo.Call(uintptr(hdc), uintptr(cx), uintptr(cy-s))
-		procLineTo.Call(uintptr(hdc), uintptr(cx+s), uintptr(cy))
-		procMoveTo.Call(uintptr(hdc), uintptr(cx-s+2), uintptr(cy), 0)
-		procLineTo.Call(uintptr(hdc), uintptr(cx-s+2), uintptr(cy+s))
-		procLineTo.Call(uintptr(hdc), uintptr(cx+s-2), uintptr(cy+s))
-		procLineTo.Call(uintptr(hdc), uintptr(cx+s-2), uintptr(cy))
+		stroke(cx-s, cy, cx, cy-s)
+		stroke(cx, cy-s, cx+s, cy)
+		stroke(cx-s+2, cy, cx-s+2, cy+s)
+		stroke(cx+s-2, cy, cx+s-2, cy+s)
+		stroke(cx-s+2, cy+s, cx+s-2, cy+s)
 	case "clean":
-		roundFill(hdc, rect(cx-s, cy-s/2, cx+s, cy+s), 3, color, color)
+		box(cx-s, cy-s/2, cx+s, cy+s)
+		stroke(cx-s/2, cy, cx+s/2, cy)
 	case "history":
-		fillEllipse(hdc, rect(cx-s, cy-s, cx+s, cy+s), color)
+		box(cx-s, cy-s, cx+s, cy+s)
+		stroke(cx, cy-s, cx, cy)
+		stroke(cx, cy, cx+s/2, cy)
 	case "disk":
-		roundFill(hdc, rect(cx-s, cy-s/2, cx+s, cy+s/2), 3, color, color)
+		box(cx-s, cy-s/3, cx+s, cy+s/3)
+		stroke(cx-s, cy, cx+s, cy)
+	case "files":
+		box(cx-s, cy-s, cx+s, cy+s)
+		stroke(cx-s/2, cy-s/3, cx+s/2, cy-s/3)
+		stroke(cx-s/2, cy, cx+s/2, cy)
 	case "dupes":
-		roundFill(hdc, rect(cx-s, cy-s, cx, cy), 2, color, color)
-		roundFill(hdc, rect(cx, cy, cx+s, cy+s), 2, color, color)
+		box(cx-s, cy-s, cx, cy)
+		box(cx, cy, cx+s, cy+s)
 	case "apps":
-		roundFill(hdc, rect(cx-s, cy-s, cx-2, cy-2), 2, color, color)
-		roundFill(hdc, rect(cx+2, cy-s, cx+s, cy-2), 2, color, color)
-		roundFill(hdc, rect(cx-s, cy+2, cx-2, cy+s), 2, color, color)
-		roundFill(hdc, rect(cx+2, cy+2, cx+s, cy+s), 2, color, color)
+		box(cx-s, cy-s, cx-2, cy-2)
+		box(cx+2, cy-s, cx+s, cy-2)
+		box(cx-s, cy+2, cx-2, cy+s)
+		box(cx+2, cy+2, cx+s, cy+s)
 	case "system":
-		roundFill(hdc, rect(cx-s, cy-s, cx+s, cy+s), 4, color, color)
+		box(cx-s, cy-s, cx+s, cy+s)
+		stroke(cx-s, cy, cx+s, cy)
+		stroke(cx, cy-s, cx, cy+s)
 	default:
-		roundFill(hdc, rect(cx-s/2, cy-s/2, cx+s/2, cy+s/2), 3, color, color)
+		box(cx-s/2, cy-s/2, cx+s/2, cy+s/2)
 	}
 	win.SelectObject(hdc, old)
 	win.DeleteObject(win.HGDIOBJ(pen))
@@ -285,24 +393,30 @@ func roundWindow(hwnd win.HWND) {
 	runtime.KeepAlive(&pref)
 }
 
+func textWidth(hdc win.HDC, s string) int {
+	if s == "" {
+		return 0
+	}
+	buf, err := windows.UTF16FromString(s)
+	if err != nil || len(buf) < 2 {
+		return 0
+	}
+	var sz struct{ cx, cy int32 }
+	procTextExtent.Call(uintptr(hdc), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)-1), uintptr(unsafe.Pointer(&sz)))
+	runtime.KeepAlive(buf)
+	return int(sz.cx)
+}
+
+func analyzeHot() bool {
+	return uiPtr != nil && uiPtr.page == ui.PageAnalyze && paintingBtn != 0 && uiPtr.hotBtn == paintingBtn
+}
+
+func fillColor(hdc win.HDC, rc win.RECT, color win.COLORREF) {
+	brush := solidBrush(color)
+	fill(hdc, rc, brush)
+	win.DeleteObject(win.HGDIOBJ(brush))
+}
+
 func contains(rc win.RECT, x, y int) bool {
 	return x >= int(rc.Left) && x < int(rc.Right) && y >= int(rc.Top) && y < int(rc.Bottom)
-}
-
-func ptIn(rc win.RECT, pt win.POINT) bool {
-	return contains(rc, int(pt.X), int(pt.Y))
-}
-
-var (
-	procLoadCursor = user32.NewProc("LoadCursorW")
-	procSetCursor  = user32.NewProc("SetCursor")
-)
-
-func setHand(on bool) {
-	id := uintptr(win.IDC_ARROW)
-	if on {
-		id = 32649 // IDC_HAND
-	}
-	cur, _, _ := procLoadCursor.Call(0, id)
-	procSetCursor.Call(cur)
 }

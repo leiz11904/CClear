@@ -239,6 +239,76 @@ func OpenSettings(uri string) error {
 	return OpenPath(uri)
 }
 
+func LogicalDrives() ([]string, error) {
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+	get := kernel32.NewProc("GetLogicalDriveStringsW")
+	n, _, _ := get.Call(0, 0)
+	if n == 0 {
+		return nil, errors.New("无法列出磁盘")
+	}
+	buf := make([]uint16, n+1)
+	r, _, err := get.Call(uintptr(len(buf)), uintptr(unsafe.Pointer(&buf[0])))
+	if r == 0 {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("无法列出磁盘")
+	}
+	var drives []string
+	start := 0
+	for i, c := range buf {
+		if c != 0 {
+			continue
+		}
+		if i > start {
+			drives = append(drives, strings.TrimRight(windows.UTF16ToString(buf[start:i]), `\`))
+		}
+		start = i + 1
+		if i+1 < len(buf) && buf[i+1] == 0 {
+			break
+		}
+	}
+	return drives, nil
+}
+
+func KnownFolder(id string) (string, error) {
+	guid, ok := knownFolders[id]
+	if !ok {
+		return "", errors.New("未知的常用位置")
+	}
+	shell32 := windows.NewLazySystemDLL("shell32.dll")
+	var out *uint16
+	r, _, _ := shell32.NewProc("SHGetKnownFolderPath").Call(uintptr(unsafe.Pointer(&guid)), 0, 0, uintptr(unsafe.Pointer(&out)))
+	if r != 0 || out == nil {
+		return fallbackFolder(id)
+	}
+	defer windows.CoTaskMemFree(unsafe.Pointer(out))
+	path := windows.UTF16PtrToString(out)
+	if path == "" {
+		return fallbackFolder(id)
+	}
+	return path, nil
+}
+
+var knownFolders = map[string]windows.GUID{
+	"downloads": {Data1: 0x374DE290, Data2: 0x123F, Data3: 0x4565, Data4: [8]byte{0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B}},
+	"pictures":  {Data1: 0x33E28130, Data2: 0x4E1E, Data3: 0x4676, Data4: [8]byte{0x83, 0x5A, 0x98, 0x39, 0x5C, 0x3B, 0xC3, 0xBB}},
+	"videos":    {Data1: 0x18989B1D, Data2: 0x99B5, Data3: 0x455B, Data4: [8]byte{0x84, 0x1C, 0xAB, 0x7C, 0x74, 0xE4, 0xDD, 0xFC}},
+	"documents": {Data1: 0xFDD39AD0, Data2: 0x238F, Data3: 0x46AF, Data4: [8]byte{0xAD, 0xB4, 0x6C, 0x85, 0x48, 0x03, 0x69, 0xC7}},
+}
+
+func fallbackFolder(id string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", errors.New("无法定位常用文件夹")
+	}
+	name := map[string]string{"downloads": "Downloads", "pictures": "Pictures", "videos": "Videos", "documents": "Documents"}[id]
+	if name == "" {
+		return "", errors.New("未知的常用位置")
+	}
+	return filepath.Join(home, name), nil
+}
+
 func RunCommand(exe, args string) error {
 	lower := strings.ToLower(exe)
 	if strings.Contains(lower, "cmd.exe") || strings.Contains(lower, "powershell") || strings.Contains(lower, "wscript") {

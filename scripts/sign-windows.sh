@@ -29,7 +29,7 @@ sign() {
   tmp=$1.signed
   osslsigncode sign -pkcs12 "$CCLEAR_CERT" \
     ${CCLEAR_CERT_PASS:+-pass "$CCLEAR_CERT_PASS"} \
-    -n "CClear" -i "https://example.invalid/cclear" \
+    -n "CClear" -i "https://github.com/leiz11904/CClear" \
     -in "$src" -out "$tmp"
   mv "$tmp" "$src"
 }

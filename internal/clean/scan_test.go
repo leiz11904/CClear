@@ -60,10 +60,10 @@ func TestScanSkipsSymlinksAndRecentFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(secret, filepath.Join(root, "link.tmp")); err != nil {
-		t.Fatal(err)
+		t.Skip("NOT RUN: symlink creation failed: " + err.Error())
 	}
 	if err := os.Symlink(outside, filepath.Join(root, "linked-dir")); err != nil {
-		t.Fatal(err)
+		t.Skip("NOT RUN: symlink creation failed: " + err.Error())
 	}
 	oldTime := time.Now().Add(-48 * time.Hour)
 	for _, path := range []string{old, nestedOld} {
@@ -211,7 +211,7 @@ func TestScanRefusesSymlinkedRoot(t *testing.T) {
 	parent := t.TempDir()
 	link := filepath.Join(parent, "root-link")
 	if err := os.Symlink(outside, link); err != nil {
-		t.Fatal(err)
+		t.Skip("NOT RUN: symlink creation failed: " + err.Error())
 	}
 	_, err := ScanRoot(context.Background(), link, osChecker{}, ScanOptions{})
 	if err == nil {

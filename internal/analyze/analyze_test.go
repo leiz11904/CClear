@@ -57,7 +57,7 @@ func TestScanSkipsSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(docs, "link")); err != nil {
-		t.Fatal(err)
+		t.Skip("NOT RUN: symlink creation failed: " + err.Error())
 	}
 	rep := Scan(context.Background(), Env{UserProfile: root}, nil)
 	for _, file := range rep.Large {

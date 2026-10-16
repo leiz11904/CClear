@@ -1,0 +1,53 @@
+:root {
+  color-scheme: light;
+  --bg: #eef2f6;
+  --panel: #ffffff;
+  --ink: #1d2836;
+  --muted: #5d6b7c;
+  --line: #d7e0ea;
+  --brand: #2f6fed;
+  --brand-ink: #ffffff;
+  --hot: #e7f0fd;
+  --warn: #8a5a12;
+  --warn-bg: #fbf6ee;
+  --danger: #b42318;
+  --ok: #1f7a62;
+  --track: #e5edf5;
+  --shadow: 0 10px 24px rgba(24, 39, 64, 0.06);
+  --radius: 14px;
+  --radius-sm: 10px;
+  --rail: 188px;
+  --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141a22;
+  --panel: #1c2430;
+  --ink: #e7eef6;
+  --muted: #9aabbe;
+  --line: rgba(255, 255, 255, 0.1);
+  --brand: #7aa6f5;
+  --brand-ink: #102033;
+  --hot: rgba(122, 166, 245, 0.16);
+  --warn: #e0be90;
+  --warn-bg: rgba(224, 190, 144, 0.12);
+  --danger: #f0a8a2;
+  --ok: #8ed0bf;
+  --track: #2a3442;
+  --shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+}
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+h1, h2, p { margin: 0; }
+code { font-family: "Cascadia Mono", "Segoe UI Mono", Consolas, monospace; }

@@ -10,6 +10,8 @@ import (
 
 	"cclear/internal/appinfo"
 	"cclear/internal/syswin"
+	uitheme "cclear/internal/ui"
+	"cclear/internal/winptr"
 	"github.com/lxn/win"
 	"golang.org/x/sys/windows"
 )
@@ -28,36 +30,45 @@ const (
 	idLaunch = 105
 	wmDone   = win.WM_APP + 8
 
-	dtSingleLine = 0x00000020
-	dtWordBreak  = 0x00000010
-	dtNoPrefix   = 0x00000800
-	bmGetCheck   = 0x00F0
-	bmSetCheck   = 0x00F1
-	bstChecked   = 1
-	wmGetText    = 13
-	wmGetTextLen = 14
-	bifNewStyle  = 0x0040 | 0x0001
+	dtCenter      = 0x00000001
+	dtVCenter     = 0x00000004
+	dtWordBreak   = 0x00000010
+	dtSingleLine  = 0x00000020
+	dtNoPrefix    = 0x00000800
+	dtEndEllipsis = 0x00008000
+	bmGetCheck    = 0x00F0
+	bmSetCheck    = 0x00F1
+	bstChecked    = 1
+	wmGetText     = 13
+	wmGetTextLen  = 14
+	bifNewStyle   = 0x0040 | 0x0001
 )
 
 type setup struct {
-	hwnd        win.HWND
-	body        win.HWND
-	license     win.HWND
-	dir         win.HWND
-	browse      win.HWND
-	progress    win.HWND
-	launch      win.HWND
-	back        win.HWND
-	next        win.HWND
-	cancel      win.HWND
-	font        win.HFONT
-	title       win.HFONT
-	pageBrush   win.HBRUSH
-	headBrush   win.HBRUSH
-	dpi         int
-	page        int
-	installing  bool
-	installedTo string
+	hwnd         win.HWND
+	body         win.HWND
+	license      win.HWND
+	dir          win.HWND
+	browse       win.HWND
+	progress     win.HWND
+	launch       win.HWND
+	back         win.HWND
+	next         win.HWND
+	cancel       win.HWND
+	font         win.HFONT
+	title        win.HFONT
+	caption      win.HFONT
+	pageBrush    win.HBRUSH
+	cardBrush    win.HBRUSH
+	footerBrush  win.HBRUSH
+	theme        uitheme.Theme
+	highContrast bool
+	noticeTitle  string
+	noticeBody   string
+	dpi          int
+	page         int
+	installing   bool
+	installedTo  string
 }
 
 func main() {
@@ -73,6 +84,7 @@ func main() {
 	}
 	if isSilent(os.Args) {
 		if err := install(defaultDir()); err != nil {
+			win.MessageBox(0, utf(err.Error()), utf("安装没有完成"), win.MB_ICONWARNING)
 			os.Exit(1)
 		}
 		return
@@ -88,8 +100,8 @@ func runUninstall() {
 			return
 		}
 	}
-	if err := uninstall(); err != nil && !isSilent(os.Args) {
-		win.MessageBox(0, utf(err.Error()), utf("卸载 CClear"), win.MB_ICONWARNING)
+	if err := uninstall(); err != nil {
+		win.MessageBox(0, utf(err.Error()), utf("卸载没有完成"), win.MB_ICONWARNING)
 		os.Exit(1)
 	}
 	if !isSilent(os.Args) {
@@ -104,8 +116,7 @@ func runWizard() error {
 	icc.DwICC = win.ICC_PROGRESS_CLASS | win.ICC_STANDARD_CLASSES
 	win.InitCommonControlsEx(&icc)
 	inst := win.GetModuleHandle(nil)
-	ui.pageBrush = brush(rgb(244, 247, 246))
-	ui.headBrush = brush(rgb(15, 118, 110))
+	ui.loadChrome()
 	icon := win.LoadIcon(inst, win.MAKEINTRESOURCE(1))
 	class := win.WNDCLASSEX{
 		CbSize:        uint32(unsafe.Sizeof(win.WNDCLASSEX{})),
@@ -113,7 +124,6 @@ func runWizard() error {
 		LpfnWndProc:   windows.NewCallback(setupProc),
 		HInstance:     inst,
 		HCursor:       win.LoadCursor(0, win.MAKEINTRESOURCE(win.IDC_ARROW)),
-		HbrBackground: ui.pageBrush,
 		LpszClassName: utf("CClearSetup"),
 		HIcon:         icon,
 		HIconSm:       icon,
@@ -123,7 +133,7 @@ func runWizard() error {
 	}
 	ui.hwnd = win.CreateWindowEx(0, utf("CClearSetup"), utf("CClear 安装程序"),
 		win.WS_OVERLAPPED|win.WS_CAPTION|win.WS_SYSMENU|win.WS_MINIMIZEBOX|win.WS_CLIPCHILDREN,
-		win.CW_USEDEFAULT, win.CW_USEDEFAULT, 760, 520,
+		win.CW_USEDEFAULT, win.CW_USEDEFAULT, 720, 500,
 		0, 0, inst, nil)
 	if ui.hwnd == 0 {
 		return errRegister
@@ -131,10 +141,9 @@ func runWizard() error {
 	if dpi := win.GetDpiForWindow(ui.hwnd); dpi != 0 {
 		ui.dpi = int(dpi)
 	}
-	win.SetWindowPos(ui.hwnd, 0, 0, 0, int32(ui.px(760)), int32(ui.px(520)), win.SWP_NOMOVE|win.SWP_NOZORDER)
-	ui.font = uiFont(ui.dpi, 10, win.FW_NORMAL)
-	ui.title = uiFont(ui.dpi, 18, win.FW_SEMIBOLD)
+	win.SetWindowPos(ui.hwnd, 0, 0, 0, int32(ui.px(720)), int32(ui.px(500)), win.SWP_NOMOVE|win.SWP_NOZORDER)
 	ui.createChildren(inst)
+	ui.applyChrome()
 	ui.showPage()
 	win.ShowWindow(ui.hwnd, win.SW_SHOW)
 	win.UpdateWindow(ui.hwnd)
@@ -143,6 +152,9 @@ func runWizard() error {
 		ret := win.GetMessage(&msg, 0, 0, 0)
 		if ret == 0 || ret == -1 {
 			break
+		}
+		if win.IsDialogMessage(ui.hwnd, &msg) {
+			continue
 		}
 		win.TranslateMessage(&msg)
 		win.DispatchMessage(&msg)
@@ -175,9 +187,32 @@ func (s *setup) proc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr 
 	case win.WM_COMMAND:
 		s.onCommand(uint32(wParam) & 0xFFFF)
 		return 0
-	case win.WM_CTLCOLORSTATIC:
+	case win.WM_DRAWITEM:
+		if lParam != 0 {
+			s.paintButton((*drawItem)(unsafe.Pointer(lParam)))
+		}
+		return 1
+	case win.WM_DPICHANGED:
+		s.dpi = int(uint32(wParam) & 0xFFFF)
+		if s.dpi == 0 {
+			s.dpi = 96
+		}
+		if lParam != 0 {
+			rc := (*win.RECT)(unsafe.Pointer(lParam))
+			win.SetWindowPos(hwnd, 0, rc.Left, rc.Top, rc.Right-rc.Left, rc.Bottom-rc.Top, win.SWP_NOZORDER|win.SWP_NOACTIVATE)
+		}
+		s.applyChrome()
+		s.layout()
+		win.InvalidateRect(hwnd, nil, true)
+		return 0
+	case win.WM_CTLCOLORSTATIC, win.WM_CTLCOLOREDIT, win.WM_CTLCOLORBTN:
 		win.SetBkMode(win.HDC(wParam), win.TRANSPARENT)
-		win.SetTextColor(win.HDC(wParam), rgb(51, 65, 85))
+		win.SetTextColor(win.HDC(wParam), win.COLORREF(s.theme.Text))
+		if msg == win.WM_CTLCOLOREDIT {
+			win.SetBkMode(win.HDC(wParam), win.OPAQUE)
+			win.SetBkColor(win.HDC(wParam), win.COLORREF(s.theme.Card))
+			return uintptr(s.cardBrush)
+		}
 		return uintptr(s.pageBrush)
 	case wmDone:
 		s.installFinished()
@@ -202,19 +237,20 @@ func (s *setup) proc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr 
 
 func (s *setup) createChildren(inst win.HINSTANCE) {
 	s.body = child("STATIC", "", win.WS_CHILD|win.SS_LEFT|win.SS_NOPREFIX, 0)
-	s.license = child("EDIT", licenseText, win.WS_CHILD|win.WS_VSCROLL|win.ES_MULTILINE|win.ES_READONLY|win.ES_AUTOVSCROLL|win.WS_BORDER, 0)
-	s.dir = child("EDIT", defaultDir(), win.WS_CHILD|win.WS_TABSTOP|win.ES_AUTOHSCROLL|win.WS_BORDER, 0)
-	s.browse = child("BUTTON", "浏览...", win.WS_CHILD|win.WS_TABSTOP, idBrowse)
+	s.license = child("EDIT", licenseText, win.WS_CHILD|win.WS_VSCROLL|win.ES_MULTILINE|win.ES_READONLY|win.ES_AUTOVSCROLL, 0)
+	s.dir = child("EDIT", defaultDir(), win.WS_CHILD|win.WS_TABSTOP|win.ES_AUTOHSCROLL, 0)
+	s.browse = child("BUTTON", "浏览", win.WS_CHILD|win.WS_TABSTOP|win.BS_OWNERDRAW, idBrowse)
 	s.progress = child("msctls_progress32", "", win.WS_CHILD|win.PBS_MARQUEE, 0)
 	win.SendMessage(s.progress, win.PBM_SETRANGE32, 0, 100)
-	s.launch = child("BUTTON", "启动 CClear", win.WS_CHILD|win.WS_TABSTOP|win.BS_AUTOCHECKBOX, idLaunch)
+	s.launch = child("BUTTON", "安装完成后启动 CClear", win.WS_CHILD|win.WS_TABSTOP|win.BS_AUTOCHECKBOX, idLaunch)
 	win.SendMessage(s.launch, bmSetCheck, bstChecked, 0)
-	s.back = child("BUTTON", "上一步", win.WS_CHILD|win.WS_TABSTOP, idBack)
-	s.next = child("BUTTON", "下一步", win.WS_CHILD|win.WS_TABSTOP|win.BS_DEFPUSHBUTTON, idNext)
-	s.cancel = child("BUTTON", "取消", win.WS_CHILD|win.WS_TABSTOP, idCancel)
-	for _, hwnd := range []win.HWND{s.body, s.license, s.dir, s.browse, s.launch, s.back, s.next, s.cancel} {
-		win.SendMessage(hwnd, win.WM_SETFONT, uintptr(s.font), 1)
-	}
+	s.back = child("BUTTON", "上一步", win.WS_CHILD|win.WS_TABSTOP|win.BS_OWNERDRAW, idBack)
+	s.next = child("BUTTON", "下一步", win.WS_CHILD|win.WS_TABSTOP|win.BS_OWNERDRAW, idNext)
+	s.cancel = child("BUTTON", "取消", win.WS_CHILD|win.WS_TABSTOP|win.BS_OWNERDRAW, idCancel)
+	s.ownButton(s.browse, false)
+	s.ownButton(s.back, false)
+	s.ownButton(s.next, true)
+	s.ownButton(s.cancel, false)
 	_ = inst
 }
 
@@ -229,6 +265,7 @@ func (s *setup) onCommand(id uint32) {
 		win.SendMessage(s.hwnd, win.WM_CLOSE, 0, 0)
 	case idBack:
 		if s.page > pageWelcome && s.page < pageInstall {
+			s.clearNotice()
 			s.page--
 			s.showPage()
 		}
@@ -242,14 +279,18 @@ func (s *setup) onCommand(id uint32) {
 func (s *setup) nextPage() {
 	switch s.page {
 	case pageWelcome, pageLicense:
+		s.clearNotice()
 		s.page++
 		s.showPage()
 	case pageDir:
 		dir := windowText(s.dir)
 		if _, err := validInstallDir(dir); err != nil {
-			win.MessageBox(s.hwnd, utf(err.Error()), utf("CClear 安装程序"), win.MB_ICONWARNING)
+			s.setNotice("请检查安装位置", err.Error())
+			s.layout()
+			win.InvalidateRect(s.hwnd, nil, true)
 			return
 		}
+		s.clearNotice()
 		s.installedTo = dir
 		s.page = pageInstall
 		s.installing = true
@@ -284,11 +325,12 @@ func (s *setup) installFinished() {
 	installMu.Unlock()
 	if err != nil {
 		s.installedTo = ""
-		win.MessageBox(s.hwnd, utf(err.Error()), utf("安装没有完成"), win.MB_ICONWARNING)
+		s.setNotice("安装没有完成", err.Error())
 		s.page = pageDir
 		s.showPage()
 		return
 	}
+	s.clearNotice()
 	s.page = pageFinish
 	s.showPage()
 }
@@ -309,19 +351,19 @@ func (s *setup) showPage() {
 	switch s.page {
 	case pageDir:
 		setText(s.next, "安装")
-		setText(s.body, "选择 CClear 的安装文件夹。")
+		setText(s.body, "安装文件夹")
 	case pageInstall:
 		setText(s.next, "安装")
-		setText(s.body, "正在复制文件并创建快捷方式，请稍候。")
+		setText(s.body, "正在复制文件并创建快捷方式。")
 	case pageFinish:
 		setText(s.next, "完成")
 		setText(s.cancel, "关闭")
-		setText(s.body, "CClear 已安装。\r\n\r\n可以在开始菜单、桌面或“应用和功能”里找到它。卸载不会删除你的文档。")
+		setText(s.body, "可以在开始菜单、桌面或“应用和功能”里打开 CClear。卸载不会删除你的文档。")
 	default:
 		setText(s.next, "下一步")
 		setText(s.cancel, "取消")
 		if s.page == pageWelcome {
-			setText(s.body, "此向导将把 CClear 安装到你的计算机。\r\n\r\nCClear 用于安全清理系统盘上的临时文件、缓存和回收站。它不会删除文档、桌面、下载目录，也不会卸载已安装的软件。\r\n\r\n点击“下一步”继续。")
+			setText(s.body, "此向导会把 CClear 安装到这台电脑。\r\n\r\n它只清理临时文件、缓存和回收站，不会删除文档、桌面、下载目录，也不会卸载已安装的软件。")
 		}
 	}
 	s.layout()
@@ -340,31 +382,36 @@ func (s *setup) layout() {
 	win.GetClientRect(s.hwnd, &client)
 	w := int(client.Right)
 	h := int(client.Bottom)
-	m := s.px(20)
-	header := s.px(88)
-	btnH := s.px(32)
-	btnW := s.px(96)
-	btnY := h - m - btnH
-	top := header + m
-	bottom := btnY - m
-	bodyBottom := bottom
+	m := s.px(32)
+	top := s.px(120)
+	bottom := h - s.px(uitheme.FooterH) - s.px(16)
+	if s.noticeBody != "" {
+		bottom -= s.noticeHeight() + s.px(8)
+	}
+	if bottom < top {
+		bottom = top + s.px(32)
+	}
 	switch s.page {
 	case pageDir:
-		bodyBottom = top + s.px(32)
+		win.MoveWindow(s.body, int32(m), int32(top), int32(w-m*2), int32(s.px(22)), true)
+		fieldY := top + s.px(32)
+		browseW := s.px(96)
+		win.MoveWindow(s.dir, int32(m), int32(fieldY), int32(w-m*2-browseW-s.px(uitheme.Space)), int32(s.px(32)), true)
+		win.MoveWindow(s.browse, int32(w-m-browseW), int32(fieldY), int32(browseW), int32(s.px(32)), true)
+		setEditMargins(s.dir, s.px(10))
 	case pageInstall:
-		bodyBottom = top + s.px(64)
+		win.MoveWindow(s.body, int32(m), int32(top), int32(w-m*2), int32(s.px(40)), true)
+		win.MoveWindow(s.progress, int32(m), int32(top+s.px(48)), int32(w-m*2), int32(s.px(6)), true)
 	case pageFinish:
-		bodyBottom = top + s.px(100)
+		win.MoveWindow(s.body, int32(m), int32(top), int32(w-m*2), int32(s.px(64)), true)
+		win.MoveWindow(s.launch, int32(m), int32(top+s.px(72)), int32(w-m*2), int32(s.px(24)), true)
+	case pageLicense:
+		win.MoveWindow(s.license, int32(m), int32(top), int32(w-m*2), int32(bottom-top), true)
+		setEditMargins(s.license, s.px(12))
+	default:
+		win.MoveWindow(s.body, int32(m), int32(top), int32(w-m*2), int32(bottom-top), true)
 	}
-	win.MoveWindow(s.body, int32(m), int32(top), int32(w-m*2), int32(bodyBottom-top), true)
-	win.MoveWindow(s.license, int32(m), int32(top), int32(w-m*2), int32(bottom-top), true)
-	win.MoveWindow(s.dir, int32(m), int32(top+s.px(36)), int32(w-m*3-s.px(96)), int32(s.px(28)), true)
-	win.MoveWindow(s.browse, int32(w-m-s.px(96)), int32(top+s.px(36)), int32(s.px(96)), int32(s.px(28)), true)
-	win.MoveWindow(s.progress, int32(m), int32(top+s.px(80)), int32(w-m*2), int32(s.px(16)), true)
-	win.MoveWindow(s.launch, int32(m), int32(top+s.px(110)), int32(w-m*2), int32(s.px(24)), true)
-	win.MoveWindow(s.cancel, int32(w-m-btnW), int32(btnY), int32(btnW), int32(btnH), true)
-	win.MoveWindow(s.next, int32(w-m*2-btnW*2), int32(btnY), int32(btnW), int32(btnH), true)
-	win.MoveWindow(s.back, int32(w-m*3-btnW*3), int32(btnY), int32(btnW), int32(btnH), true)
+	s.placeButtons(w, h)
 }
 
 func (s *setup) paint() {
@@ -373,17 +420,7 @@ func (s *setup) paint() {
 	defer win.EndPaint(s.hwnd, &ps)
 	var client win.RECT
 	win.GetClientRect(s.hwnd, &client)
-	fillRect(hdc, client, s.pageBrush)
-	header := client
-	header.Bottom = int32(s.px(88))
-	fillRect(hdc, header, s.headBrush)
-	win.SetBkMode(hdc, win.TRANSPARENT)
-	win.SetTextColor(hdc, rgb(255, 255, 255))
-	old := win.SelectObject(hdc, win.HGDIOBJ(s.title))
-	drawText(hdc, pageTitle(s.page), box(s.px(24), s.px(18), int(client.Right)-s.px(24), s.px(52)), dtSingleLine|dtNoPrefix)
-	win.SelectObject(hdc, win.HGDIOBJ(s.font))
-	drawText(hdc, pageSub(s.page), box(s.px(24), s.px(52), int(client.Right)-s.px(24), s.px(78)), dtSingleLine|dtNoPrefix)
-	win.SelectObject(hdc, old)
+	s.paintChrome(hdc, client)
 }
 
 func pageTitle(page int) string {
@@ -397,20 +434,20 @@ func pageTitle(page int) string {
 	case pageFinish:
 		return "安装完成"
 	default:
-		return "欢迎使用 CClear 安装向导"
+		return "安装 CClear"
 	}
 }
 
 func pageSub(page int) string {
 	switch page {
 	case pageLicense:
-		return "请阅读下面的说明，然后点击“下一步”。"
+		return "请阅读下面的说明。"
 	case pageDir:
 		return "建议安装到 Program Files。"
 	case pageInstall:
 		return "请不要关闭这个窗口。"
 	case pageFinish:
-		return "安装程序已经完成。"
+		return "CClear 已经安装到这台电脑。"
 	default:
 		return "安全清理系统盘上的临时文件和缓存。"
 	}
@@ -429,7 +466,7 @@ func browseFolder(owner win.HWND, title string) (string, bool) {
 	if pidl == 0 {
 		return "", false
 	}
-	defer windows.CoTaskMemFree(unsafe.Pointer(pidl))
+	defer windows.CoTaskMemFree(winptr.Ptr(pidl))
 	var path [260]uint16
 	ok, _, _ := shell32.NewProc("SHGetPathFromIDListW").Call(pidl, uintptr(unsafe.Pointer(&path[0])))
 	if ok == 0 {
@@ -471,6 +508,7 @@ func setText(hwnd win.HWND, text string) {
 	ptr := utf(text)
 	win.SendMessage(hwnd, win.WM_SETTEXT, 0, uintptr(unsafe.Pointer(ptr)))
 	runtime.KeepAlive(ptr)
+	win.InvalidateRect(hwnd, nil, true)
 }
 
 func (s *setup) px(n int) int {
@@ -508,28 +546,6 @@ func drawText(hdc win.HDC, text string, rc win.RECT, format uint32) {
 	ptr := utf(text)
 	win.DrawTextEx(hdc, ptr, -1, &rc, format, nil)
 	runtime.KeepAlive(ptr)
-}
-
-func uiFont(dpi, points int, weight int32) win.HFONT {
-	if dpi <= 0 {
-		dpi = 96
-	}
-	px := points * 96 / 72
-	lf := win.LOGFONT{
-		LfHeight:         -int32(px * dpi / 96),
-		LfWeight:         weight,
-		LfCharSet:        win.DEFAULT_CHARSET,
-		LfOutPrecision:   4,
-		LfQuality:        win.CLEARTYPE_QUALITY,
-		LfPitchAndFamily: win.VARIABLE_PITCH | win.FF_SWISS,
-	}
-	name, err := windows.UTF16FromString("Microsoft YaHei UI")
-	if err == nil {
-		for i := 0; i < len(name) && i < len(lf.LfFaceName); i++ {
-			lf.LfFaceName[i] = name[i]
-		}
-	}
-	return win.CreateFontIndirect(&lf)
 }
 
 type osError string
