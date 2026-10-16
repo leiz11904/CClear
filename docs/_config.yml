@@ -1,0 +1,9 @@
+title: CClear
+description: Windows 系统空间管理
+theme: jekyll-theme-cayman
+show_downloads: false
+plugins:
+  - jekyll-relative-links
+relative_links:
+  enabled: true
+  collections: false
